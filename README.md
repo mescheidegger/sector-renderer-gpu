@@ -21,8 +21,30 @@ It intentionally does **not** provide a game loop, player controller, physics/co
 
 ## Installation
 
+`sector-renderer-gpu` is currently distributed directly from this GitHub repository and is not published to the npm registry.
+
+Install it directly from GitHub:
+
 ```sh
-npm install sector-renderer-gpu
+npm install github:mescheidegger/sector-renderer-gpu
+```
+
+To keep a local copy, clone the repository:
+
+```sh
+git clone https://github.com/mescheidegger/sector-renderer-gpu.git
+```
+
+Another local project can then install that copy by filesystem path, for example:
+
+```sh
+npm install ../sector-renderer-gpu
+```
+
+In either case, import the installed package by its package name:
+
+```js
+import { SectorRenderer } from 'sector-renderer-gpu';
 ```
 
 ## Quick Start: Hello Room
