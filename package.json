@@ -1,0 +1,37 @@
+{
+  "name": "sector-renderer-gpu",
+  "version": "0.1.0",
+  "description": "Browser-based WebGL 1 sector renderer for sector-authored worlds.",
+  "keywords": [
+    "webgl",
+    "renderer",
+    "sector",
+    "2.5d",
+    "retro-fps"
+  ],
+  "author": "Michael Scheidegger",
+  "license": "MIT",
+  "repository": {
+  "type": "git",
+  "url": "git+https://github.com/mescheidegger/sector-renderer-gpu.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mescheidegger/sector-renderer-gpu/issues"
+  },
+  "homepage": "https://github.com/mescheidegger/sector-renderer-gpu#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
