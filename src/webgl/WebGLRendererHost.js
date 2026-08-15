@@ -13,19 +13,20 @@ import { resolveViewportSize } from './canvas/resolveViewportSize.js';
 import { resolveProjection } from './resolveProjection.js';
 import { resolveQuadUvs } from './resolveQuadUvs.js';
 
-function writeQuadVertices(target, {
+export function writeQuadVertices(target, {
   corners,
   opacity = 1,
+  lightLevel = 1,
   uvs
 }) {
   const [topLeft, topRight, bottomRight, bottomLeft] = corners;
   const [uvTopLeft, uvTopRight, uvBottomRight, uvBottomLeft] = uvs;
 
   target.push(
-    topLeft[0], topLeft[1], topLeft[2], uvTopLeft[0], uvTopLeft[1], 1, 1, 1, opacity, 1,
-    topRight[0], topRight[1], topRight[2], uvTopRight[0], uvTopRight[1], 1, 1, 1, opacity, 1,
-    bottomRight[0], bottomRight[1], bottomRight[2], uvBottomRight[0], uvBottomRight[1], 1, 1, 1, opacity, 1,
-    bottomLeft[0], bottomLeft[1], bottomLeft[2], uvBottomLeft[0], uvBottomLeft[1], 1, 1, 1, opacity, 1
+    topLeft[0], topLeft[1], topLeft[2], uvTopLeft[0], uvTopLeft[1], 1, 1, 1, opacity, lightLevel,
+    topRight[0], topRight[1], topRight[2], uvTopRight[0], uvTopRight[1], 1, 1, 1, opacity, lightLevel,
+    bottomRight[0], bottomRight[1], bottomRight[2], uvBottomRight[0], uvBottomRight[1], 1, 1, 1, opacity, lightLevel,
+    bottomLeft[0], bottomLeft[1], bottomLeft[2], uvBottomLeft[0], uvBottomLeft[1], 1, 1, 1, opacity, lightLevel
   );
 }
 
@@ -377,6 +378,7 @@ export class WebGLRendererHost {
         quad: {
           corners: quad.corners,
           opacity: quad.opacity ?? 1,
+          lightLevel: quad.lightLevel ?? 1,
           uvs: quad.uvs ?? null
         },
         viewProjection,

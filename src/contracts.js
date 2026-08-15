@@ -37,7 +37,7 @@
  * @property {PortalOpening[]} [portalOpenings=[]]
  * @typedef {{x:number,y:number,z:number,yaw:number}} RendererCamera
  * @typedef {{textureKey:string,x:number,y:number,z:number,width?:number,height?:number,size?:number,anchor?:'center'|'floor',opacity?:number,order?:number,flipX?:boolean,flipV?:boolean}} RendererSprite
- * @typedef {{corners:[number[],number[],number[],number[]],textureKey:string,opacity?:number,uvs?:[number[],number[],number[],number[]],flipX?:boolean,flipV?:boolean}} RendererWorldQuad
+ * @typedef {{corners:[number[],number[],number[],number[]],textureKey:string,opacity?:number,lightLevel?:number,uvs?:[number[],number[],number[],number[]],flipX?:boolean,flipV?:boolean}} RendererWorldQuad
  * @typedef {{textureKey:string,anchorX:number,anchorY:number,offsetX?:number,offsetY?:number,width:number,height:number,pivotX?:number,pivotY?:number,rotation?:number,opacity?:number,order?:number}} RendererOverlay
  * @typedef {{camera:RendererCamera,sprites?:RendererSprite[],worldQuads?:RendererWorldQuad[],overlays?:RendererOverlay[]}} RendererFrame
  * @typedef {{fovY?:number,near?:number,far?:number}} RendererProjection
