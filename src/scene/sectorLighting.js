@@ -1,13 +1,11 @@
 /**
- * Module: Normalizes authored sector light values into stable renderer-ready scalar values.
+ * Module: Normalizes authored light values into stable renderer-ready scalar values.
  */
-const DEFAULT_SECTOR_LIGHT = 1;
+const DEFAULT_LIGHT_LEVEL = 1;
 
-export function resolveSectorLightLevel(sector) {
-  const authored = sector?.lightLevel;
-
+export function normalizeLightLevel(authored) {
   if (!Number.isFinite(authored)) {
-    return DEFAULT_SECTOR_LIGHT;
+    return DEFAULT_LIGHT_LEVEL;
   }
 
   if (authored <= 1) {
@@ -15,4 +13,8 @@ export function resolveSectorLightLevel(sector) {
   }
 
   return Math.min(1, Math.max(0, authored / 255));
+}
+
+export function resolveSectorLightLevel(sector) {
+  return normalizeLightLevel(sector?.lightLevel);
 }
