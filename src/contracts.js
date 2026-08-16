@@ -21,7 +21,7 @@
  * @property {string|null} [ceilingMaterial] TextureProvider key.
  * @property {number} [floorColor] RGB fallback color encoded as 0xRRGGBB.
  * @property {number} [ceilColor] RGB fallback color encoded as 0xRRGGBB.
- * @property {number} [lightLevel=1] Light scalar in 0..1, or values above 1 interpreted on a 0..255 scale.
+ * @property {number} [lightLevel=1] Values in 0..1 are direct brightness scalars; values above 1 use a 0..255 scale. The result is clamped to 0..1, and non-finite values default to 1.
  * @property {RendererId|null} [parentSectorId] Advanced nested-sector surface relationship.
  * @typedef {Object} WallRef
  * @property {RendererId} sectorId Exact sector ID.
@@ -37,7 +37,14 @@
  * @property {PortalOpening[]} [portalOpenings=[]]
  * @typedef {{x:number,y:number,z:number,yaw:number}} RendererCamera
  * @typedef {{textureKey:string,x:number,y:number,z:number,width?:number,height?:number,size?:number,anchor?:'center'|'floor',opacity?:number,order?:number,flipX?:boolean,flipV?:boolean}} RendererSprite
- * @typedef {{corners:[number[],number[],number[],number[]],textureKey:string,opacity?:number,lightLevel?:number,uvs?:[number[],number[],number[],number[]],flipX?:boolean,flipV?:boolean}} RendererWorldQuad
+ * @typedef {Object} RendererWorldQuad
+ * @property {[number[],number[],number[],number[]]} corners Four world-space corners in top-left, top-right, bottom-right, bottom-left order.
+ * @property {string} textureKey TextureProvider key.
+ * @property {number} [opacity=1] Opacity scalar.
+ * @property {number} [lightLevel=1] Values in 0..1 are direct brightness scalars; values above 1 use a 0..255 scale. The result is clamped to 0..1, and non-finite values default to 1.
+ * @property {[number[],number[],number[],number[]]} [uvs] Four normalized uploaded-image texture coordinates.
+ * @property {boolean} [flipX=false] Reverse horizontal texture sampling.
+ * @property {boolean} [flipV=false] Reverse vertical texture sampling.
  * @typedef {{textureKey:string,anchorX:number,anchorY:number,offsetX?:number,offsetY?:number,width:number,height:number,pivotX?:number,pivotY?:number,rotation?:number,opacity?:number,order?:number}} RendererOverlay
  * @typedef {{camera:RendererCamera,sprites?:RendererSprite[],worldQuads?:RendererWorldQuad[],overlays?:RendererOverlay[]}} RendererFrame
  * @typedef {{fovY?:number,near?:number,far?:number}} RendererProjection

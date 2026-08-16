@@ -12,6 +12,7 @@ import { cleanupCanvasTarget, resolveCanvasTarget } from './canvas/resolveCanvas
 import { resolveViewportSize } from './canvas/resolveViewportSize.js';
 import { resolveProjection } from './resolveProjection.js';
 import { resolveQuadUvs } from './resolveQuadUvs.js';
+import { normalizeLightLevel } from '../scene/sectorLighting.js';
 
 export function writeQuadVertices(target, {
   corners,
@@ -378,7 +379,7 @@ export class WebGLRendererHost {
         quad: {
           corners: quad.corners,
           opacity: quad.opacity ?? 1,
-          lightLevel: quad.lightLevel ?? 1,
+          lightLevel: normalizeLightLevel(quad.lightLevel),
           uvs: quad.uvs ?? null
         },
         viewProjection,

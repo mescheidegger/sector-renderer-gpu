@@ -378,12 +378,13 @@ Each dimension resolves independently in this order: explicit `width`/`height`, 
     [0, 2, 0]  // bottom-left
   ],
   opacity: 1,
+  lightLevel: 0.65,
   flipX: false,
   flipV: false
 }
 ```
 
-`textureKey` and exactly four `[x, y, z]` corners are required. Corner order is **top-left, top-right, bottom-right, bottom-left** as viewed from the intended front. Default UVs map the texture record's atlas rectangle to that order. `flipX` reverses its left/right coordinates, `flipV` reverses its top/bottom coordinates, and enabling both reverses both axes. Optional `uvs` supplies four `[u,v]` pairs in the same order; these are direct normalized uploaded-image coordinates, so custom UVs take responsibility for atlas placement and supersede both flip flags. Quads render in submission order with depth testing and are useful for moving geometry, animated/transient planes, and externally generated surfaces.
+`textureKey` and exactly four `[x, y, z]` corners are required. Corner order is **top-left, top-right, bottom-right, bottom-left** as viewed from the intended front. Default UVs map the texture record's atlas rectangle to that order. `flipX` reverses its left/right coordinates, `flipV` reverses its top/bottom coordinates, and enabling both reverses both axes. Optional `uvs` supplies four `[u,v]` pairs in the same order; these are direct normalized uploaded-image coordinates, so custom UVs take responsibility for atlas placement and supersede both flip flags. `lightLevel` defaults to `1`; values from `0..1` are direct brightness scalars, while values above `1` are interpreted on a `0..255` scale, and the resulting value is clamped to `0..1`. These semantics intentionally match `RendererSector.lightLevel` and are particularly useful when `worldQuads` provide replacement geometry for `dynamicSectorIds`. Quads render in submission order with depth testing and are useful for moving geometry, animated/transient planes, and externally generated surfaces.
 
 ### `RendererOverlay`
 
