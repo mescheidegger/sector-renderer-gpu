@@ -12,8 +12,8 @@ function unpackColor(colorHex) {
   return [r, g, b, 1];
 }
 
-function getGroupKey(material) {
-  return material?.key ?? '__fallback_flat__';
+function getGroupKey(material, projection) {
+  return `${material?.key ?? '__fallback_flat__'}\u0000${projection}`;
 }
 
 /** Builds packed static mesh buffers and stats from GPU scene primitives. */
@@ -40,12 +40,13 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
     texturedGroupCount: 0
   };
 
-  const getGroup = (material, fallbackColor, surfaceType) => {
-    const groupKey = getGroupKey(material);
+  const getGroup = (material, fallbackColor, surfaceType, projection = 'world') => {
+    const groupKey = getGroupKey(material, projection);
     if (!groupIndexMap.has(groupKey)) {
       groupIndexMap.set(groupKey, {
         materialKey: material?.key ?? null,
         surfaceType,
+        projection,
         fallbackColor,
         indices: []
       });
@@ -69,11 +70,11 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
     );
   };
 
-  const pushTriangle = ({ a, b, c, uvA, uvB, uvC, color, kind, material }) => {
+  const pushTriangle = ({ a, b, c, uvA, uvB, uvC, color, kind, material, projection = 'world' }) => {
     if (nextIndex + 2 > 65535) {
       throw new RangeError(`[SectorRenderer] Static mesh exceeds the WebGL1 Uint16 index limit (vertex count ${nextIndex + 3}; maximum index 65535 / vertex capacity 65536).`);
     }
-    const group = getGroup(material, color, kind);
+    const group = getGroup(material, color, kind, projection);
 
     const lightLevel = typeof a.lightLevel === 'number' ? a.lightLevel : 1;
     pushVertex(a, uvA, color, lightLevel);
@@ -169,7 +170,8 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
         uvC: { u: b.x / PLANAR_UV_SCALE, v: b.y / PLANAR_UV_SCALE },
         color,
         kind: 'ceiling',
-        material: ceiling.material
+        material: ceiling.material,
+        projection: ceiling.projection ?? 'world'
       });
     }
   }
@@ -184,6 +186,7 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
     groups.push({
       materialKey: group.materialKey,
       surfaceType: group.surfaceType,
+      projection: group.projection,
       fallbackColor: group.fallbackColor,
       startIndex,
       indexCount: group.indices.length

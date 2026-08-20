@@ -7,6 +7,7 @@ The package turns sector polygons into static floors, ceilings, and walls, then 
 ## Features
 
 - Static sector geometry with textured or flat-colored walls, floors, and ceilings
+- Directionally projected panoramic materials for sky-projected ceilings
 - Height-aware portals between neighboring sectors
 - Camera-facing sprites, caller-generated world quads, and screen overlays
 - Caller-owned textures, including atlas regions for dynamic presentation that share one GPU upload
@@ -167,6 +168,7 @@ A `SectorRenderWorld` is:
 | `ceil` | Required | Finite ceiling Z greater than `floor`. |
 | `floorMaterial` | Optional string/null | Floor texture key; absent/null uses flat color. |
 | `ceilingMaterial` | Optional string/null | Ceiling texture key; absent/null uses flat color. |
+| `ceilingProjection` | Optional `'world'` or `'sky'` | Defaults to `'world'`. World ceilings use planar world-space UVs; sky ceilings use direction-derived panoramic UVs. Other values are rejected. Floors remain world-projected and walls are unaffected. |
 | `floorColor` | Optional number | `0xRRGGBB` flat-color fallback. Otherwise derived from wall colors (or gray). |
 | `ceilColor` | Optional number | `0xRRGGBB` flat-color fallback. Otherwise derived from wall colors (or gray). |
 | `lightLevel` | Optional number | Defaults to `1`. Values `0..1` are direct; values above 1 are interpreted on a `0..255` scale; the result is clamped to `0..1`. |
@@ -204,6 +206,23 @@ Both values are horizontal world coordinates. Z comes from the containing sector
 Floors and ceilings are triangulated from `vertices`; both clockwise and counter-clockwise simple polygons are supported. Do not repeat the first vertex at the end. Concave simple polygons are supported. Sector polygons must be non-degenerate simple polygons. If a structurally valid polygon cannot be triangulated, scene construction throws an error identifying the affected sector.
 
 Walls are explicit spans rather than being synthesized from polygon edges. For a closed room, provide one wall for every polygon boundary edge, normally in the same cyclic order as the vertices. The shallow public validator checks finite vertex coordinates, finite ordered heights, and wall vertex references. It does not verify boundary coverage, winding, polygon simplicity, or other topology; comprehensive geometric/topological correctness remains the caller's responsibility.
+
+### Sky-projected ceilings
+
+A sector can keep its ordinary ceiling polygon while sampling its ceiling material as a camera-relative panorama:
+
+```js
+{
+  id: 'courtyard',
+  // vertices, walls, floor, and ceil...
+  ceilingMaterial: 'panorama',
+  ceilingProjection: 'sky'
+}
+```
+
+The ceiling triangles remain the visibility and masking surface. With `'sky'`, texture coordinates come from camera/view direction instead of the ceiling's planar coordinates: yaw changes the visible horizontal portion, while camera translation, authored sector XY position, and ceiling height do not translate the panorama or determine its apparent distance. Horizontal sampling wraps continuously through 360 degrees. Omitting `ceilingProjection`, or setting it to `'world'`, preserves existing ceiling rendering. Camera pitch and roll remain unsupported by the renderer generally.
+
+Static draw grouping distinguishes projection mode as well as material, so one texture key may safely appear on both world- and sky-projected surfaces.
 
 ## Portals
 
@@ -278,9 +297,9 @@ All public material keys are non-empty **strings** and are opaque to the rendere
 
 The caller's `TextureProvider` resolves keys. A null/absent static surface material selects its flat-color fallback. Static geometry also uses that fallback when its material key is not present in the **successfully created** texture registry. This is different from a declared startup texture failing: construction fails rather than silently substituting a color. Dynamic sprites/quads/overlays with a key that is not usable in the registry are skipped. Numeric material keys are rejected at the world boundary so every material obeys the provider's string-key contract.
 
-Static wall, floor, and ceiling UVs are baked in world/repeating coordinates and are not remapped through a record's `uvRect` at draw time. Consequently, use **full-image texture records for repeating static world materials**. Atlas sub-region records work with the default UV generation used by sprites, world quads, and overlays, but are not currently a safe general material contract for static world surfaces.
+Static walls, floors, and `'world'` ceilings use baked world/planar repeating coordinates and are not remapped through a record's `uvRect` at draw time. A `'sky'` ceiling instead derives UVs at draw time from viewing direction. Consequently, use **full-image texture records for repeating static materials**, including panoramic sky materials. Atlas sub-region records work with the default UV generation used by sprites, world quads, and overlays, but are not a safe source for a wrapping sky panorama or a general repeating static-world material.
 
-Under the current WebGL1 upload policy, power-of-two image dimensions use `REPEAT` wrapping, mipmaps, and anisotropy where supported. Non-power-of-two images use `CLAMP_TO_EDGE` and no mipmaps. If a static material needs to tile beyond `0..1`, use a power-of-two uploaded image.
+Under the current WebGL1 upload policy, power-of-two image dimensions use `REPEAT` wrapping, mipmaps, and anisotropy where supported. Non-power-of-two images use `CLAMP_TO_EDGE` and no mipmaps. If a static material needs to tile beyond `0..1`, use a power-of-two uploaded image. In particular, a panorama expected to wrap seamlessly through 360 degrees must be supplied as a full-image record whose upload is compatible with horizontal repeat under this policy.
 
 ## TextureProvider
 
@@ -358,13 +377,30 @@ All four finite numbers are required. Position is the eye in world coordinates. 
   opacity: 1,
   order: 0,
   flipX: false,
-  flipV: false
+  flipV: false,
+  surfaceConstraints: [{ normal: { x: 1, y: 0 }, point: { x: 0, y: 2 } }]
 }
 ```
 
 Sprites are vertical billboards: they rotate around world Z to face the camera and stay upright; they do not pitch toward it. `'center'` places the quad center at `z`; `'floor'` places its bottom at `z`. Values other than these two are not supported (the current renderer treats them like `'center'`, but callers must not rely on that fallback).
 
 Each dimension resolves independently in this order: explicit `width`/`height`, then `size`, then texture `sourceSize.w`/`.h`, then texture logical `width`/`height`, then `1`. Thus setting only `width` still allows height to come from later fallbacks. Sprites draw far-to-near. `order` (default `0`, ascending) breaks equal-distance ties; it is not a global Z index. `opacity` defaults to `1`; `flipX` and `flipV` reverse texture sampling horizontally and vertically.
+
+`surfaceConstraints` is optional presentation metadata for keeping an upright billboard in front of vertical world surfaces as the camera angle changes. Each constraint has a horizontal `normal` pointing toward the allowed side and a horizontal `point` located on the actual surface plane. The renderer normalizes valid normals and ignores zero-length or non-finite constraints. It measures the submitted center's signed distance from each plane—thereby preserving spacing already applied by the caller—and shifts the center by the minimum additional displacement that clears every supplied surface. A plane already farther away than the projected billboard half-width requires no additional push. A sprite without active valid constraints uses its submitted position exactly as a normal billboard does.
+
+```js
+{
+  textureKey: 'effect',
+  x: 4.02, y: 2, z: 1,
+  size: 1.2,
+  surfaceConstraints: [
+    { normal: { x: 1, y: 0 }, point: { x: 4, y: 2 } },
+    { normal: { x: 0, y: 1 }, point: { x: 4, y: 2 } }
+  ]
+}
+```
+
+The renderer does not inspect world geometry, determine collisions, detect corners, or derive these normals. The rendering-only caller supplies constraints obtained from its own presentation or simulation logic. Constrained sprites are sorted using their resolved presentation center; other transparent-sprite sorting behavior is unchanged.
 
 ### `RendererWorldQuad`
 

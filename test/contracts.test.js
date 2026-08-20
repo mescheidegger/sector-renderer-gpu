@@ -39,6 +39,23 @@ test('renderer world boundary validates IDs and references', () => {
   assert.throws(() => api.assertRendererWorld({ sectors: [{ ...sector(), walls: [{ a: 0, b: 1, material: 42 }] }] }), /material.*string/);
 });
 
+test('ceiling projection accepts world and sky, defaults downstream to world, and rejects other values', () => {
+  assert.doesNotThrow(() => api.assertRendererWorld({ sectors: [{ ...sector(), ceilingProjection: 'world' }] }));
+  assert.doesNotThrow(() => api.assertRendererWorld({ sectors: [{ ...sector(), ceilingProjection: 'sky' }] }));
+  assert.throws(
+    () => api.assertRendererWorld({ sectors: [{ ...sector(), ceilingProjection: 'screen' }] }),
+    /ceilingProjection must be "world" or "sky"/
+  );
+
+  const omitted = buildGpuScene({ sectors: [sector()] });
+  assert.equal(omitted.ceilings[0].projection, 'world');
+  assert.equal(omitted.ceilings[0].triangles[0].projection, 'world');
+  const sky = buildGpuScene({ sectors: [{ ...sector(), ceilingProjection: 'sky' }] });
+  assert.equal(sky.ceilings[0].projection, 'sky');
+  assert.equal(sky.ceilings[0].triangles[0].projection, 'sky');
+  assert.equal(sky.floors[0].projection, 'world');
+});
+
 test('renderer world boundary validates exact portal and parent sector IDs', () => {
   const target = sector(0);
   const referencing = (overrides) => ({ ...sector('source'), ...overrides });

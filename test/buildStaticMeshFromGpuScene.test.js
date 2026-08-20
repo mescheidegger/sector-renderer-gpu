@@ -43,3 +43,25 @@ test('packs missing materials into one valid fallback group', () => {
   assert.equal(result.mesh.groups[0].indexCount, result.mesh.indices.length);
   assert.equal(result.stats.texturedGroupCount, 0);
 });
+
+test('separates sky and world projection groups using the same material', () => {
+  const map = singleSectorMap({ floorMaterial: 'shared' });
+  map.sectors[0].ceilingMaterial = 'shared';
+  map.sectors[0].ceilingProjection = 'sky';
+  const result = buildStaticMeshFromGpuScene(buildGpuScene(map));
+  const shared = result.mesh.groups.filter((group) => group.materialKey === 'shared');
+
+  assert.deepEqual(shared.map((group) => group.projection).sort(), ['sky', 'world']);
+  assert.equal(shared.reduce((count, group) => count + group.indexCount, 0), 12);
+});
+
+test('authored world ceiling UVs remain planar when projection is omitted or world', () => {
+  const omitted = buildStaticMeshFromGpuScene(buildGpuScene(singleSectorMap()));
+  const explicitMap = singleSectorMap();
+  explicitMap.sectors[0].ceilingProjection = 'world';
+  const explicit = buildStaticMeshFromGpuScene(buildGpuScene(explicitMap));
+
+  assert.deepEqual(explicit.mesh.vertices, omitted.mesh.vertices);
+  assert.deepEqual(explicit.mesh.indices, omitted.mesh.indices);
+  assert.equal(explicit.mesh.groups.find((group) => group.surfaceType === 'ceiling').projection, 'world');
+});

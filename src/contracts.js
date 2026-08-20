@@ -19,6 +19,7 @@
  * @property {number} ceil Ceiling Z coordinate.
  * @property {string|null} [floorMaterial] TextureProvider key.
  * @property {string|null} [ceilingMaterial] TextureProvider key.
+ * @property {'world'|'sky'} [ceilingProjection='world'] Ceiling texture coordinate projection.
  * @property {number} [floorColor] RGB fallback color encoded as 0xRRGGBB.
  * @property {number} [ceilColor] RGB fallback color encoded as 0xRRGGBB.
  * @property {number} [lightLevel=1] Values in 0..1 are direct brightness scalars; values above 1 use a 0..255 scale. The result is clamped to 0..1, and non-finite values default to 1.
@@ -36,7 +37,26 @@
  * @property {RendererId[]} [dynamicSectorIds=[]]
  * @property {PortalOpening[]} [portalOpenings=[]]
  * @typedef {{x:number,y:number,z:number,yaw:number}} RendererCamera
- * @typedef {{textureKey:string,x:number,y:number,z:number,width?:number,height?:number,size?:number,anchor?:'center'|'floor',opacity?:number,order?:number,flipX?:boolean,flipV?:boolean}} RendererSprite
+ * @typedef {Object} RendererHorizontalPoint
+ * @property {number} x Horizontal X coordinate.
+ * @property {number} y Horizontal Y coordinate.
+ * @typedef {Object} RendererVerticalSurfaceConstraint
+ * @property {RendererHorizontalPoint} normal Horizontal normal pointing toward the allowed side; normalized internally.
+ * @property {RendererHorizontalPoint} point Any horizontal point on the vertical surface plane.
+ * @typedef {Object} RendererSprite
+ * @property {string} textureKey
+ * @property {number} x
+ * @property {number} y
+ * @property {number} z
+ * @property {number} [width]
+ * @property {number} [height]
+ * @property {number} [size]
+ * @property {'center'|'floor'} [anchor='center']
+ * @property {number} [opacity=1]
+ * @property {number} [order=0]
+ * @property {boolean} [flipX=false]
+ * @property {boolean} [flipV=false]
+ * @property {RendererVerticalSurfaceConstraint[]} [surfaceConstraints] Optional planes that keep this upright billboard in front of one or more vertical world surfaces.
  * @typedef {Object} RendererWorldQuad
  * @property {[number[],number[],number[],number[]]} corners Four world-space corners in top-left, top-right, bottom-right, bottom-left order.
  * @property {string} textureKey TextureProvider key.
@@ -96,6 +116,9 @@ export function assertRendererWorld(world) {
     if (sector.ceil <= sector.floor) fail(`Sector "${key}" ceil must be greater than floor.`);
     assertMaterialKey(sector.floorMaterial, `Sector "${key}" floorMaterial`);
     assertMaterialKey(sector.ceilingMaterial, `Sector "${key}" ceilingMaterial`);
+    if (sector.ceilingProjection != null && sector.ceilingProjection !== 'world' && sector.ceilingProjection !== 'sky') {
+      fail(`Sector "${key}" ceilingProjection must be "world" or "sky".`);
+    }
     sector.walls.forEach((wall, wallIndex) => {
       for (const endpoint of ['a', 'b']) {
         const vertexIndex = wall?.[endpoint];

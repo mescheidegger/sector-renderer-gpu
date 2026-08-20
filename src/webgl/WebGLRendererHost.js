@@ -14,6 +14,9 @@ import { resolveProjection } from './resolveProjection.js';
 import { resolveQuadUvs } from './resolveQuadUvs.js';
 import { normalizeLightLevel } from '../scene/sectorLighting.js';
 
+// Prevents coplanar precision artifacts; this is not visible presentation spacing.
+export const SURFACE_SEPARATION_EPSILON = 0.001;
+
 export function writeQuadVertices(target, {
   corners,
   opacity = 1,
@@ -36,6 +39,70 @@ function resolveSpriteDimensions(sprite, textureRecord) {
     width: sprite.width ?? sprite.size ?? textureRecord?.sourceSize?.w ?? textureRecord?.width ?? 1,
     height: sprite.height ?? sprite.size ?? textureRecord?.sourceSize?.h ?? textureRecord?.height ?? 1
   };
+}
+
+function normalizeVerticalSurfaceConstraints(surfaceConstraints) {
+  if (!Array.isArray(surfaceConstraints)) return [];
+  return surfaceConstraints.flatMap((constraint) => {
+    const x = constraint?.normal?.x;
+    const y = constraint?.normal?.y;
+    const pointX = constraint?.point?.x;
+    const pointY = constraint?.point?.y;
+    const length = Math.hypot(x, y);
+    return Number.isFinite(length) && length > 0.000001
+      && Number.isFinite(pointX) && Number.isFinite(pointY)
+      ? [{ normal: { x: x / length, y: y / length }, point: { x: pointX, y: pointY } }]
+      : [];
+  });
+}
+
+function satisfiesSurfaceClearances(displacement, constraints) {
+  return constraints.every(({ normal, clearance }) => (
+    (displacement.x * normal.x) + (displacement.y * normal.y) >= clearance - 1e-10
+  ));
+}
+
+export function resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, halfWidth) {
+  const surfaces = normalizeVerticalSurfaceConstraints(sprite.surfaceConstraints);
+  if (surfaces.length === 0) {
+    return [sprite.x, sprite.y, sprite.z];
+  }
+
+  const constraints = surfaces.map(({ normal, point }) => {
+    const currentDistance = ((sprite.x - point.x) * normal.x) + ((sprite.y - point.y) * normal.y);
+    const requiredDistance = Math.abs((cameraRight[0] * normal.x) + (cameraRight[1] * normal.y))
+      * halfWidth + SURFACE_SEPARATION_EPSILON;
+    return { normal, clearance: requiredDistance - currentDistance };
+  });
+  const candidates = [{ x: 0, y: 0 }, ...constraints.map(({ normal, clearance }) => ({
+    x: normal.x * clearance,
+    y: normal.y * clearance
+  }))];
+
+  for (let i = 0; i < constraints.length; i += 1) {
+    for (let j = i + 1; j < constraints.length; j += 1) {
+      const a = constraints[i];
+      const b = constraints[j];
+      const determinant = (a.normal.x * b.normal.y) - (a.normal.y * b.normal.x);
+      if (Math.abs(determinant) <= 1e-10) continue;
+      candidates.push({
+        x: ((a.clearance * b.normal.y) - (a.normal.y * b.clearance)) / determinant,
+        y: ((a.normal.x * b.clearance) - (a.clearance * b.normal.x)) / determinant
+      });
+    }
+  }
+
+  const valid = candidates.filter((candidate) => satisfiesSurfaceClearances(candidate, constraints));
+  if (valid.length === 0) return [sprite.x, sprite.y, sprite.z];
+  const displacement = valid.reduce((best, candidate) => (
+    ((candidate.x ** 2) + (candidate.y ** 2)) < ((best.x ** 2) + (best.y ** 2)) ? candidate : best
+  ));
+
+  return [
+    sprite.x + displacement.x,
+    sprite.y + displacement.y,
+    sprite.z
+  ];
 }
 
 function deleteStaticMeshBuffers(gl, meshBuffers) {
@@ -87,7 +154,10 @@ export class WebGLRendererHost {
       this.uniformLocations = {
         viewProjection: this.gl.getUniformLocation(this.program, 'uViewProjection'),
         texture: this.gl.getUniformLocation(this.program, 'uTexture'),
-        useTexture: this.gl.getUniformLocation(this.program, 'uUseTexture')
+        useTexture: this.gl.getUniformLocation(this.program, 'uUseTexture'),
+        skyProjection: this.gl.getUniformLocation(this.program, 'uSkyProjection'),
+        cameraPosition: this.gl.getUniformLocation(this.program, 'uCameraPosition'),
+        cameraYaw: this.gl.getUniformLocation(this.program, 'uCameraYaw')
       };
 
       this.meshBuffers = uploadStaticMesh(this.gl, mesh);
@@ -173,11 +243,8 @@ export class WebGLRendererHost {
     const halfWidth = width * 0.5;
     const halfHeight = height * 0.5;
     const anchorMode = sprite.anchor ?? 'center';
-    const centerZ = anchorMode === 'floor' ? sprite.z + halfHeight : sprite.z;
-
-    const cx = sprite.x;
-    const cy = sprite.y;
-    const cz = centerZ;
+    const [cx, cy, surfaceZ] = resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, halfWidth);
+    const cz = anchorMode === 'floor' ? surfaceZ + halfHeight : surfaceZ;
 
     const rx = cameraRight[0] * halfWidth;
     const ry = cameraRight[1] * halfWidth;
@@ -280,17 +347,20 @@ export class WebGLRendererHost {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, textureRecord.texture);
     gl.uniform1f(this.uniformLocations.useTexture, 1);
+    gl.uniform1f(this.uniformLocations.skyProjection, 0);
     gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
 
     return true;
   }
 
-  drawStaticWorld(viewProjection) {
+  drawStaticWorld(viewProjection, camera) {
     const gl = this.gl;
     this.setupVertexAttributes(this.meshBuffers.vertexBuffer);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.meshBuffers.indexBuffer);
 
     gl.uniformMatrix4fv(this.uniformLocations.viewProjection, false, viewProjection);
+    gl.uniform3f(this.uniformLocations.cameraPosition, camera.x, camera.y, camera.z);
+    gl.uniform1f(this.uniformLocations.cameraYaw, camera.yaw);
 
     let drawCalls = 0;
     let texturedDrawCalls = 0;
@@ -305,6 +375,7 @@ export class WebGLRendererHost {
       }
 
       gl.uniform1f(this.uniformLocations.useTexture, useTexture);
+      gl.uniform1f(this.uniformLocations.skyProjection, group.projection === 'sky' ? 1 : 0);
       gl.drawElements(
         gl.TRIANGLES,
         group.indexCount,
@@ -319,11 +390,17 @@ export class WebGLRendererHost {
 
   drawWorldSprites({ sprites, viewProjection, cameraRight, viewerX, viewerY }) {
     const gl = this.gl;
-    const sorted = [...sprites].sort((a, b) => {
-      const aDx = (a.x ?? 0) - viewerX;
-      const aDy = (a.y ?? 0) - viewerY;
-      const bDx = (b.x ?? 0) - viewerX;
-      const bDy = (b.y ?? 0) - viewerY;
+    const resolvedSprites = sprites.map((sprite) => {
+      const textureRecord = this.textureRegistry.get(sprite.textureKey);
+      const dimensions = resolveSpriteDimensions(sprite, textureRecord);
+      const center = resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, dimensions.width * 0.5);
+      return { sprite, textureRecord, dimensions, center };
+    });
+    const sorted = resolvedSprites.sort((a, b) => {
+      const aDx = (a.center[0] ?? 0) - viewerX;
+      const aDy = (a.center[1] ?? 0) - viewerY;
+      const bDx = (b.center[0] ?? 0) - viewerX;
+      const bDy = (b.center[1] ?? 0) - viewerY;
       const aDistanceSq = (aDx * aDx) + (aDy * aDy);
       const bDistanceSq = (bDx * bDx) + (bDy * bDy);
 
@@ -331,19 +408,17 @@ export class WebGLRendererHost {
         return bDistanceSq - aDistanceSq;
       }
 
-      return (a.order ?? 0) - (b.order ?? 0);
+      return (a.sprite.order ?? 0) - (b.sprite.order ?? 0);
     });
 
     gl.depthMask(false);
 
     let draws = 0;
-    for (const sprite of sorted) {
-      const textureRecord = this.textureRegistry.get(sprite.textureKey);
+    for (const { sprite, textureRecord, dimensions } of sorted) {
       if (!textureRecord || textureRecord.failed) {
         continue;
       }
 
-      const dimensions = resolveSpriteDimensions(sprite, textureRecord);
       const quad = this.buildWorldBillboardQuad(
         {
           ...sprite,
@@ -439,7 +514,7 @@ export class WebGLRendererHost {
 
     const cameraRight = [Math.cos(camera.yaw), -Math.sin(camera.yaw), 0];
 
-    const staticStats = this.drawStaticWorld(viewProjection);
+    const staticStats = this.drawStaticWorld(viewProjection, camera);
     const worldQuadDraws = this.drawWorldQuads({
       quads: worldQuads,
       viewProjection
