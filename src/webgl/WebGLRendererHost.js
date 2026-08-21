@@ -13,6 +13,7 @@ import { resolveViewportSize } from './canvas/resolveViewportSize.js';
 import { resolveProjection } from './resolveProjection.js';
 import { resolveQuadUvs } from './resolveQuadUvs.js';
 import { normalizeLightLevel } from '../scene/sectorLighting.js';
+import { resolveAnimatedMaterialKey } from '../materials/resolveAnimatedMaterialKey.js';
 
 // Prevents coplanar precision artifacts; this is not visible presentation spacing.
 export const SURFACE_SEPARATION_EPSILON = 0.001;
@@ -127,13 +128,14 @@ function deleteDynamicBuffers(gl, dynamicBuffers) {
 
 /** Low-level WebGL host that owns GPU resources and performs all frame drawing. */
 export class WebGLRendererHost {
-  constructor({ canvas, container, width = 1280, height = 720, pixelRatio = 1, projection, mesh, textureProvider }) {
+  constructor({ canvas, container, width = 1280, height = 720, pixelRatio = 1, projection, mesh, textureProvider, materialAnimations = new Map() }) {
     const canvasTarget = resolveCanvasTarget({ canvas, container });
     this.canvas = canvasTarget.canvas;
     this.ownsCanvas = canvasTarget.ownsCanvas;
     this.ownerContainer = canvasTarget.ownerContainer;
     try {
       this.projection = resolveProjection(projection);
+      this.materialAnimations = materialAnimations;
 
       this.gl = createWebGLContext(this.canvas);
 
@@ -353,7 +355,7 @@ export class WebGLRendererHost {
     return true;
   }
 
-  drawStaticWorld(viewProjection, camera) {
+  drawStaticWorld(viewProjection, camera, timeSeconds = 0) {
     const gl = this.gl;
     this.setupVertexAttributes(this.meshBuffers.vertexBuffer);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.meshBuffers.indexBuffer);
@@ -366,7 +368,8 @@ export class WebGLRendererHost {
     let texturedDrawCalls = 0;
 
     for (const group of this.meshBuffers.groups) {
-      const textureRecord = this.textureRegistry.get(group.materialKey);
+      const resolvedKey = resolveAnimatedMaterialKey(group.materialKey, timeSeconds, this.materialAnimations);
+      const textureRecord = this.textureRegistry.get(resolvedKey);
       const useTexture = textureRecord && !textureRecord.failed ? 1 : 0;
       if (useTexture) {
         gl.activeTexture(gl.TEXTURE0);
@@ -491,7 +494,7 @@ export class WebGLRendererHost {
   }
 
   /** Draws one full frame of world geometry, sprites, and overlays. */
-  render({ camera, sprites = [], worldQuads = [], overlays = [] }) {
+  render({ camera, sprites = [], worldQuads = [], overlays = [], timeSeconds = 0 }) {
     const start = performance.now();
     const gl = this.gl;
 
@@ -514,7 +517,7 @@ export class WebGLRendererHost {
 
     const cameraRight = [Math.cos(camera.yaw), -Math.sin(camera.yaw), 0];
 
-    const staticStats = this.drawStaticWorld(viewProjection, camera);
+    const staticStats = this.drawStaticWorld(viewProjection, camera, timeSeconds);
     const worldQuadDraws = this.drawWorldQuads({
       quads: worldQuads,
       viewProjection

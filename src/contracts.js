@@ -7,7 +7,7 @@
  * @typedef {Object} RendererWall
  * @property {number} a Index of the wall's first vertex.
  * @property {number} b Index of the wall's second vertex.
- * @property {string|null} [material] TextureProvider key; null/omitted uses flat color.
+ * @property {string|null} [material] Material key resolved directly through the TextureProvider or through a configured material animation; null/omitted uses flat color.
  * @property {number} [color=0xffffff] RGB fallback tint encoded as 0xRRGGBB.
  * @property {RendererId|null} [portalTo] Exact ID of the sector behind this wall.
  * @property {number} [uvScale] Positive world units per horizontal texture repeat.
@@ -17,8 +17,8 @@
  * @property {RendererWall[]} walls Boundary wall spans referencing vertices.
  * @property {number} floor Floor Z coordinate.
  * @property {number} ceil Ceiling Z coordinate.
- * @property {string|null} [floorMaterial] TextureProvider key.
- * @property {string|null} [ceilingMaterial] TextureProvider key.
+ * @property {string|null} [floorMaterial] Material key resolved directly through the TextureProvider or through a configured material animation.
+ * @property {string|null} [ceilingMaterial] Material key resolved directly through the TextureProvider or through a configured material animation.
  * @property {'world'|'sky'} [ceilingProjection='world'] Ceiling texture coordinate projection.
  * @property {number} [floorColor] RGB fallback color encoded as 0xRRGGBB.
  * @property {number} [ceilColor] RGB fallback color encoded as 0xRRGGBB.
@@ -31,7 +31,7 @@
  * @property {WallRef} wallRef Portal wall to decorate/constrain.
  * @property {number} [bottomZ] Opening lower bound.
  * @property {number} [topZ] Opening upper bound.
- * @property {string|null} [trimMaterial] TextureProvider key for side trim.
+ * @property {string|null} [trimMaterial] Material key for side trim, resolved directly through the TextureProvider or through a configured material animation.
  * @typedef {Object} SectorRenderWorld
  * @property {RendererSector[]} sectors
  * @property {RendererId[]} [dynamicSectorIds=[]]
@@ -66,12 +66,13 @@
  * @property {boolean} [flipX=false] Reverse horizontal texture sampling.
  * @property {boolean} [flipV=false] Reverse vertical texture sampling.
  * @typedef {{textureKey:string,anchorX:number,anchorY:number,offsetX?:number,offsetY?:number,width:number,height:number,pivotX?:number,pivotY?:number,rotation?:number,opacity?:number,order?:number}} RendererOverlay
- * @typedef {{camera:RendererCamera,sprites?:RendererSprite[],worldQuads?:RendererWorldQuad[],overlays?:RendererOverlay[]}} RendererFrame
+ * @typedef {{camera:RendererCamera,timeSeconds?:number,sprites?:RendererSprite[],worldQuads?:RendererWorldQuad[],overlays?:RendererOverlay[]}} RendererFrame
+ * @typedef {{materialKey:string,frames:string[],frameDurationSeconds:number}} MaterialAnimation
  * @typedef {{fovY?:number,near?:number,far?:number}} RendererProjection
  * @typedef {{enabled?:boolean,targetSeamKey?:string,targetWallRef?:WallRef}} RendererSeamDebugOptions
  * @typedef {{seam?:RendererSeamDebugOptions}} RendererDebugOptions
  * @typedef {import('./textureProvider.js').TextureProvider} TextureProvider
- * @typedef {{world:SectorRenderWorld,canvas?:HTMLCanvasElement,container?:HTMLElement,width?:number,height?:number,pixelRatio?:number,projection?:RendererProjection,textureProvider:TextureProvider,debug?:RendererDebugOptions}} SectorRendererOptions
+ * @typedef {{world:SectorRenderWorld,canvas?:HTMLCanvasElement,container?:HTMLElement,width?:number,height?:number,pixelRatio?:number,projection?:RendererProjection,textureProvider:TextureProvider,materialAnimations?:MaterialAnimation[],debug?:RendererDebugOptions}} SectorRendererOptions
  */
 
 const fail = (message) => { throw new TypeError(`[SectorRenderer] ${message}`); };
@@ -181,6 +182,7 @@ export function assertRendererFrame(frame) {
   if (!frame || typeof frame !== 'object') fail('Renderer frame must be an object.');
   if (!frame.camera || typeof frame.camera !== 'object') fail('Renderer frame requires a camera.');
   for (const key of ['x', 'y', 'z', 'yaw']) if (!Number.isFinite(frame.camera[key])) fail(`Camera ${key} must be a finite number.`);
+  if (frame.timeSeconds != null && (!Number.isFinite(frame.timeSeconds) || frame.timeSeconds < 0)) fail('timeSeconds must be a non-negative finite number.');
   for (const key of ['sprites', 'worldQuads', 'overlays']) if (frame[key] != null && !Array.isArray(frame[key])) fail(`${key} must be an array.`);
   return frame;
 }

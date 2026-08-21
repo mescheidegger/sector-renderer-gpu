@@ -166,8 +166,8 @@ A `SectorRenderWorld` is:
 | `walls` | Required array | Wall spans referencing entries in `vertices`. |
 | `floor` | Required | Finite floor Z. |
 | `ceil` | Required | Finite ceiling Z greater than `floor`. |
-| `floorMaterial` | Optional string/null | Floor texture key; absent/null uses flat color. |
-| `ceilingMaterial` | Optional string/null | Ceiling texture key; absent/null uses flat color. |
+| `floorMaterial` | Optional string/null | Floor material key, resolved directly through the `TextureProvider` or through a configured material animation; absent/null uses flat color. |
+| `ceilingMaterial` | Optional string/null | Ceiling material key, resolved directly through the `TextureProvider` or through a configured material animation; absent/null uses flat color. |
 | `ceilingProjection` | Optional `'world'` or `'sky'` | Defaults to `'world'`. World ceilings use planar world-space UVs; sky ceilings use direction-derived panoramic UVs. Other values are rejected. Floors remain world-projected and walls are unaffected. |
 | `floorColor` | Optional number | `0xRRGGBB` flat-color fallback. Otherwise derived from wall colors (or gray). |
 | `ceilColor` | Optional number | `0xRRGGBB` flat-color fallback. Otherwise derived from wall colors (or gray). |
@@ -196,7 +196,7 @@ Both values are horizontal world coordinates. Z comes from the containing sector
 ```
 
 - `a` and `b` index `sector.vertices`; they define the authored direction of the span.
-- `material` is an opaque `TextureProvider` key. Null/absent material renders with `color` (`0xffffff` by default).
+- `material` is an opaque material key resolved directly through the `TextureProvider` or through a configured material animation. Null/absent material renders with `color` (`0xffffff` by default).
 - `color` is an RGB integer `0xRRGGBB` and remains the fallback tint if no usable texture exists.
 - `portalTo` is the **exact** ID of the sector on the other side. See [Portals](#portals).
 - A positive finite `uvScale` means horizontal world units per texture repeat. Missing, zero, negative, or non-finite values fall back to `1`. Vertical wall UVs use world Z directly at one repeat per world unit.
@@ -295,7 +295,7 @@ All public material keys are non-empty **strings** and are opaque to the rendere
 - `sector.ceilingMaterial`
 - `portalOpening.trimMaterial`
 
-The caller's `TextureProvider` resolves keys. A null/absent static surface material selects its flat-color fallback. Static geometry also uses that fallback when its material key is not present in the **successfully created** texture registry. This is different from a declared startup texture failing: construction fails rather than silently substituting a color. Dynamic sprites/quads/overlays with a key that is not usable in the registry are skipped. Numeric material keys are rejected at the world boundary so every material obeys the provider's string-key contract.
+Static material keys resolve either directly through the caller's `TextureProvider` or through a configured material animation whose frames are provider keys. A null/absent static surface material selects its flat-color fallback. Static geometry also uses that fallback when its resolved key is not present in the **successfully created** texture registry. This is different from a declared startup texture failing: construction fails rather than silently substituting a color. Dynamic sprites/quads/overlays with a key that is not usable in the registry are skipped. Numeric material keys are rejected at the world boundary so every material obeys the string-key contract.
 
 Static walls, floors, and `'world'` ceilings use baked world/planar repeating coordinates and are not remapped through a record's `uvRect` at draw time. A `'sky'` ceiling instead derives UVs at draw time from viewing direction. Consequently, use **full-image texture records for repeating static materials**, including panoramic sky materials. Atlas sub-region records work with the default UV generation used by sprites, world quads, and overlays, but are not a safe source for a wrapping sky panorama or a general repeating static-world material.
 
@@ -554,3 +554,21 @@ The package includes no maps, art, textures, audio, or other game assets. Consum
 ## Development Status
 
 The package follows a `0.x` contract: the documented public API is suitable for use, while compatibility may evolve between minor releases before `1.0.0`.
+
+## Animated static materials
+
+`SectorRenderer` accepts an optional, generic `materialAnimations` array. Each entry declares a logical material key, two or more texture-provider frame keys, and a positive frame duration:
+
+```js
+new SectorRenderer({
+  // other options...
+  materialAnimations: [{
+    materialKey: 'animated-liquid',
+    frames: ['liquid-a', 'liquid-b', 'liquid-c'],
+    frameDurationSeconds: 0.2
+  }]
+});
+renderer.render({ camera, timeSeconds: simulationTime });
+```
+
+Every frame key must exist in the supplied `TextureProvider`; the logical key itself does not need a texture record. `timeSeconds` is optional and defaults to zero. The caller owns this simulation time: the renderer never creates an animation clock. Static mesh groups retain the logical material key, and drawing selects an already uploaded frame with `Math.floor(timeSeconds / frameDurationSeconds) % frames.length`. Geometry and textures are not rebuilt or uploaded per frame, and the mechanism applies equally to wall, floor, or ceiling groups.

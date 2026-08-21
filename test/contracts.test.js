@@ -117,6 +117,14 @@ test('renderer frame boundary validates camera and collections', () => {
   for (const key of ['sprites', 'worldQuads', 'overlays']) assert.throws(() => api.assertRendererFrame({ ...frame, [key]: {} }), new RegExp(`${key} must be an array`));
 });
 
+test('renderer frame accepts optional simulation time and rejects invalid time', () => {
+  const frame = { camera: { x: 0, y: 0, z: 1, yaw: 0 }, timeSeconds: 1.25 };
+  assert.equal(api.assertRendererFrame(frame), frame);
+  assert.doesNotThrow(() => api.assertRendererFrame({ camera: frame.camera }));
+  assert.throws(() => api.assertRendererFrame({ ...frame, timeSeconds: -1 }), /timeSeconds/);
+  assert.throws(() => api.assertRendererFrame({ ...frame, timeSeconds: Infinity }), /timeSeconds/);
+});
+
 test('projection validates partial overrides while preserving exact defaults', () => {
   assert.deepEqual(resolveProjection(), DEFAULT_PROJECTION);
   assert.equal(resolveProjection({ near: 1 }).near, 1);
