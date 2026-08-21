@@ -140,13 +140,15 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
       const a = { ...baseA, lightLevel: floor.lightLevel ?? 1 };
       const b = { ...baseB, lightLevel: floor.lightLevel ?? 1 };
       const c = { ...baseC, lightLevel: floor.lightLevel ?? 1 };
+      const originX = floor.uvOrigin?.x ?? 0;
+      const originY = floor.uvOrigin?.y ?? 0;
       pushTriangle({
         a,
         b,
         c,
-        uvA: { u: a.x / PLANAR_UV_SCALE, v: a.y / PLANAR_UV_SCALE },
-        uvB: { u: b.x / PLANAR_UV_SCALE, v: b.y / PLANAR_UV_SCALE },
-        uvC: { u: c.x / PLANAR_UV_SCALE, v: c.y / PLANAR_UV_SCALE },
+        uvA: { u: (a.x - originX) / PLANAR_UV_SCALE, v: (a.y - originY) / PLANAR_UV_SCALE },
+        uvB: { u: (b.x - originX) / PLANAR_UV_SCALE, v: (b.y - originY) / PLANAR_UV_SCALE },
+        uvC: { u: (c.x - originX) / PLANAR_UV_SCALE, v: (c.y - originY) / PLANAR_UV_SCALE },
         color,
         kind: 'floor',
         material: floor.material

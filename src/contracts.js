@@ -17,6 +17,7 @@
  * @property {RendererWall[]} walls Boundary wall spans referencing vertices.
  * @property {number} floor Floor Z coordinate.
  * @property {number} ceil Ceiling Z coordinate.
+ * @property {{x:number,y:number}} [floorUvOrigin] Optional planar floor UV origin in world coordinates.
  * @property {string|null} [floorMaterial] Material key resolved directly through the TextureProvider or through a configured material animation.
  * @property {string|null} [ceilingMaterial] Material key resolved directly through the TextureProvider or through a configured material animation.
  * @property {'world'|'sky'} [ceilingProjection='world'] Ceiling texture coordinate projection.
@@ -116,6 +117,9 @@ export function assertRendererWorld(world) {
     if (!Number.isFinite(sector.ceil)) fail(`Sector "${key}" ceil must be finite.`);
     if (sector.ceil <= sector.floor) fail(`Sector "${key}" ceil must be greater than floor.`);
     assertMaterialKey(sector.floorMaterial, `Sector "${key}" floorMaterial`);
+    if (sector.floorUvOrigin != null && (!sector.floorUvOrigin || typeof sector.floorUvOrigin !== 'object' || Array.isArray(sector.floorUvOrigin) || !Number.isFinite(sector.floorUvOrigin.x) || !Number.isFinite(sector.floorUvOrigin.y))) {
+      fail(`Sector "${key}" floorUvOrigin must contain finite x and y coordinates.`);
+    }
     assertMaterialKey(sector.ceilingMaterial, `Sector "${key}" ceilingMaterial`);
     if (sector.ceilingProjection != null && sector.ceilingProjection !== 'world' && sector.ceilingProjection !== 'sky') {
       fail(`Sector "${key}" ceilingProjection must be "world" or "sky".`);

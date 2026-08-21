@@ -21,6 +21,7 @@ function buildSurfacePrimitive(sector, kind, triangleIndices) {
   const material = resolveSectorSurfaceMaterial(sector, kind);
   const projection = kind === 'ceiling' ? sector.ceilingProjection ?? 'world' : 'world';
   const lightLevel = resolveSectorLightLevel(sector);
+  const uvOrigin = kind === 'floor' ? sector.floorUvOrigin ?? null : null;
 
   const triangles = triangleIndices
     .map(([aIndex, bIndex, cIndex], triangleIndex) => {
@@ -38,6 +39,7 @@ function buildSurfacePrimitive(sector, kind, triangleIndices) {
         color: deriveSurfaceColor(sector, kind),
         material,
         projection,
+        uvOrigin,
         lightLevel,
         vertices: [
           { x: a.x, y: a.y, z },
@@ -60,6 +62,7 @@ function buildSurfacePrimitive(sector, kind, triangleIndices) {
     color: deriveSurfaceColor(sector, kind),
     material,
     projection,
+    uvOrigin,
     lightLevel,
     triangles
   };

@@ -167,6 +167,7 @@ A `SectorRenderWorld` is:
 | `floor` | Required | Finite floor Z. |
 | `ceil` | Required | Finite ceiling Z greater than `floor`. |
 | `floorMaterial` | Optional string/null | Floor material key, resolved directly through the `TextureProvider` or through a configured material animation; absent/null uses flat color. |
+| `floorUvOrigin` | Optional `{ x, y }` | Finite world-space origin subtracted from static floor planar UVs. Omission preserves absolute world-space mapping. |
 | `ceilingMaterial` | Optional string/null | Ceiling material key, resolved directly through the `TextureProvider` or through a configured material animation; absent/null uses flat color. |
 | `ceilingProjection` | Optional `'world'` or `'sky'` | Defaults to `'world'`. World ceilings use planar world-space UVs; sky ceilings use direction-derived panoramic UVs. Other values are rejected. Floors remain world-projected and walls are unaffected. |
 | `floorColor` | Optional number | `0xRRGGBB` flat-color fallback. Otherwise derived from wall colors (or gray). |

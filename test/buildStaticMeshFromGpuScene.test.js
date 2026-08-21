@@ -65,3 +65,27 @@ test('authored world ceiling UVs remain planar when projection is omitted or wor
   assert.deepEqual(explicit.mesh.indices, omitted.mesh.indices);
   assert.equal(explicit.mesh.groups.find((group) => group.surfaceType === 'ceiling').projection, 'world');
 });
+
+test('floor UV origin produces a local zero-to-one span while omission stays world-aligned', () => {
+  const map = singleSectorMap();
+  map.sectors[0].vertices = map.sectors[0].vertices.map(({ x, y }) => ({ x: x + 45.2, y: y + 7.7 }));
+  // Make the fixture exactly one world unit square.
+  const minX = Math.min(...map.sectors[0].vertices.map(({ x }) => x));
+  const minY = Math.min(...map.sectors[0].vertices.map(({ y }) => y));
+  map.sectors[0].vertices = [{ x: minX, y: minY }, { x: minX + 1, y: minY }, { x: minX + 1, y: minY + 1 }, { x: minX, y: minY + 1 }];
+
+  const absolute = buildStaticMeshFromGpuScene(buildGpuScene(map)).mesh;
+  map.sectors[0].floorUvOrigin = { x: minX, y: minY };
+  const local = buildStaticMeshFromGpuScene(buildGpuScene(map)).mesh;
+  const floorUvs = (mesh) => {
+    const group = mesh.groups.find(({ surfaceType }) => surfaceType === 'floor');
+    return Array.from(mesh.indices.slice(group.startIndex, group.startIndex + group.indexCount), (index) => ({
+      u: mesh.vertices[index * 10 + 3], v: mesh.vertices[index * 10 + 4]
+    }));
+  };
+  const span = (values, key) => [Math.min(...values.map((uv) => uv[key])), Math.max(...values.map((uv) => uv[key]))];
+  assert.deepEqual(span(floorUvs(local), 'u'), [0, 1]);
+  assert.deepEqual(span(floorUvs(local), 'v'), [0, 1]);
+  assert.ok(span(floorUvs(absolute), 'u')[0] > 45, 'omitted origin retains absolute-world U mapping');
+  assert.ok(span(floorUvs(absolute), 'v')[0] > 7, 'omitted origin retains absolute-world V mapping');
+});

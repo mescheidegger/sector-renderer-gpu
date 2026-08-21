@@ -179,3 +179,11 @@ test('failed initialization removes only a renderer-owned canvas', () => {
   assert.throws(() => new api.SectorRenderer({ world: { sectors: [] }, canvas: callerCanvas, width: 1, height: 1, textureProvider }), /WebGL/);
   assert.equal(callerCanvas.parentNode, container);
 });
+
+test('floor UV origin accepts finite coordinates and rejects malformed values', () => {
+  assert.doesNotThrow(() => api.assertRendererWorld({ sectors: [{ ...sector(), floorUvOrigin: { x: 1.25, y: -2 } }] }));
+  for (const floorUvOrigin of [null, {}, { x: 0 }, { x: NaN, y: 0 }, { x: 0, y: Infinity }, [0, 0]]) {
+    if (floorUvOrigin === null) continue;
+    assert.throws(() => api.assertRendererWorld({ sectors: [{ ...sector(), floorUvOrigin }] }), /floorUvOrigin.*finite x and y/);
+  }
+});
