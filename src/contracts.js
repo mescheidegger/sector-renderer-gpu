@@ -44,6 +44,9 @@
  * @typedef {Object} RendererVerticalSurfaceConstraint
  * @property {RendererHorizontalPoint} normal Horizontal normal pointing toward the allowed side; normalized internally.
  * @property {RendererHorizontalPoint} point Any horizontal point on the vertical surface plane.
+ * @property {number} [clearanceOffset=0] Additional nonnegative clearance beyond the billboard's projected half-width.
+ * @typedef {Object} RendererSurfaceAttachment
+ * @property {'preserve-screen-anchor'} mode Moves and uniformly scales the sprite toward the camera so its complete projected screen geometry remains unchanged while obtaining clearance.
  * @typedef {Object} RendererSprite
  * @property {string} textureKey
  * @property {number} x
@@ -58,6 +61,7 @@
  * @property {boolean} [flipX=false]
  * @property {boolean} [flipV=false]
  * @property {RendererVerticalSurfaceConstraint[]} [surfaceConstraints] Optional planes that keep this upright billboard in front of one or more vertical world surfaces.
+ * @property {RendererSurfaceAttachment} [surfaceAttachment] Optional positioning behavior for a surface-attached sprite.
  * @typedef {Object} RendererWorldQuad
  * @property {[number[],number[],number[],number[]]} corners Four world-space corners in top-left, top-right, bottom-right, bottom-left order.
  * @property {string} textureKey TextureProvider key.

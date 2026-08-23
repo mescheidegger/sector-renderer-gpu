@@ -49,10 +49,17 @@ function normalizeVerticalSurfaceConstraints(surfaceConstraints) {
     const y = constraint?.normal?.y;
     const pointX = constraint?.point?.x;
     const pointY = constraint?.point?.y;
+    const clearanceOffset = Number.isFinite(constraint?.clearanceOffset)
+      ? Math.max(0, constraint.clearanceOffset)
+      : 0;
     const length = Math.hypot(x, y);
     return Number.isFinite(length) && length > 0.000001
       && Number.isFinite(pointX) && Number.isFinite(pointY)
-      ? [{ normal: { x: x / length, y: y / length }, point: { x: pointX, y: pointY } }]
+      ? [{
+        normal: { x: x / length, y: y / length },
+        point: { x: pointX, y: pointY },
+        clearanceOffset
+      }]
       : [];
   });
 }
@@ -63,18 +70,74 @@ function satisfiesSurfaceClearances(displacement, constraints) {
   ));
 }
 
-export function resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, halfWidth) {
+export function resolveSurfaceConstrainedBillboardPlacement(sprite, cameraRight, halfWidth, cameraPosition = null) {
   const surfaces = normalizeVerticalSurfaceConstraints(sprite.surfaceConstraints);
   if (surfaces.length === 0) {
-    return [sprite.x, sprite.y, sprite.z];
+    return { center: [sprite.x, sprite.y, sprite.z], scale: 1 };
   }
 
-  const constraints = surfaces.map(({ normal, point }) => {
+  if (sprite.surfaceAttachment?.mode === 'preserve-screen-anchor') {
+    const cameraX = cameraPosition?.x;
+    const cameraY = cameraPosition?.y;
+    const cameraZ = cameraPosition?.z;
+    if (![cameraX, cameraY, cameraZ].every(Number.isFinite)) {
+      return { center: [sprite.x, sprite.y, sprite.z], scale: 1 };
+    }
+
+    let minimumScale = 0;
+    let maximumScale = 1;
+    for (const { normal, point, clearanceOffset } of surfaces) {
+      const cameraDistance = ((cameraX - point.x) * normal.x) + ((cameraY - point.y) * normal.y);
+      const anchorDistance = ((sprite.x - point.x) * normal.x) + ((sprite.y - point.y) * normal.y);
+      const projectedHalfWidth = Math.abs(
+        (cameraRight[0] * normal.x) + (cameraRight[1] * normal.y)
+      ) * halfWidth;
+      const requiredBaseClearance = SURFACE_SEPARATION_EPSILON + clearanceOffset;
+      const constant = cameraDistance - requiredBaseClearance;
+      const coefficient = anchorDistance - cameraDistance - projectedHalfWidth;
+      if (Math.abs(coefficient) <= 1e-10) {
+        if (constant < -1e-10) {
+          return { center: [sprite.x, sprite.y, sprite.z], scale: 1 };
+        }
+        continue;
+      }
+      const bound = -constant / coefficient;
+      if (coefficient > 0) {
+        minimumScale = Math.max(minimumScale, bound);
+      } else {
+        maximumScale = Math.min(maximumScale, bound);
+      }
+    }
+
+    const scale = Math.min(1, maximumScale);
+    if (!Number.isFinite(scale) || scale <= 1e-10 || scale < Math.max(0, minimumScale) - 1e-10) {
+      return { center: [sprite.x, sprite.y, sprite.z], scale: 1 };
+    }
+    const center = [
+      cameraX + (scale * (sprite.x - cameraX)),
+      cameraY + (scale * (sprite.y - cameraY)),
+      cameraZ + (scale * (sprite.z - cameraZ))
+    ];
+    const satisfiesAll = surfaces.every(({ normal, point, clearanceOffset }) => {
+      const centerDistance = ((center[0] - point.x) * normal.x) + ((center[1] - point.y) * normal.y);
+      const projectedHalfWidth = Math.abs(
+        (cameraRight[0] * normal.x) + (cameraRight[1] * normal.y)
+      ) * halfWidth * scale;
+      return centerDistance >= projectedHalfWidth + SURFACE_SEPARATION_EPSILON + clearanceOffset - 1e-10;
+    });
+    if (!satisfiesAll) {
+      return { center: [sprite.x, sprite.y, sprite.z], scale: 1 };
+    }
+    return { center, scale };
+  }
+
+  const constraints = surfaces.map(({ normal, point, clearanceOffset }) => {
     const currentDistance = ((sprite.x - point.x) * normal.x) + ((sprite.y - point.y) * normal.y);
     const requiredDistance = Math.abs((cameraRight[0] * normal.x) + (cameraRight[1] * normal.y))
-      * halfWidth + SURFACE_SEPARATION_EPSILON;
+      * halfWidth + SURFACE_SEPARATION_EPSILON + clearanceOffset;
     return { normal, clearance: requiredDistance - currentDistance };
   });
+
   const candidates = [{ x: 0, y: 0 }, ...constraints.map(({ normal, clearance }) => ({
     x: normal.x * clearance,
     y: normal.y * clearance
@@ -94,16 +157,21 @@ export function resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, ha
   }
 
   const valid = candidates.filter((candidate) => satisfiesSurfaceClearances(candidate, constraints));
-  if (valid.length === 0) return [sprite.x, sprite.y, sprite.z];
+  if (valid.length === 0) return { center: [sprite.x, sprite.y, sprite.z], scale: 1 };
   const displacement = valid.reduce((best, candidate) => (
     ((candidate.x ** 2) + (candidate.y ** 2)) < ((best.x ** 2) + (best.y ** 2)) ? candidate : best
   ));
 
-  return [
-    sprite.x + displacement.x,
-    sprite.y + displacement.y,
-    sprite.z
-  ];
+  return {
+    center: [sprite.x + displacement.x, sprite.y + displacement.y, sprite.z],
+    scale: 1
+  };
+}
+
+export function resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, halfWidth, cameraPosition = null) {
+  return resolveSurfaceConstrainedBillboardPlacement(
+    sprite, cameraRight, halfWidth, cameraPosition
+  ).center;
 }
 
 function deleteStaticMeshBuffers(gl, meshBuffers) {
@@ -238,14 +306,18 @@ export class WebGLRendererHost {
     gl.vertexAttribPointer(this.attributeLocations.lightLevel, 1, gl.FLOAT, false, stride, 9 * Float32Array.BYTES_PER_ELEMENT);
   }
 
-  buildWorldBillboardQuad(sprite, cameraRight, cameraUp) {
+  buildWorldBillboardQuad(sprite, cameraRight, cameraUp, cameraPosition = null) {
     const width = sprite.width ?? sprite.size ?? 1;
     const height = sprite.height ?? sprite.size ?? width;
 
-    const halfWidth = width * 0.5;
-    const halfHeight = height * 0.5;
+    const submittedHalfWidth = width * 0.5;
+    const submittedHalfHeight = height * 0.5;
     const anchorMode = sprite.anchor ?? 'center';
-    const [cx, cy, surfaceZ] = resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, halfWidth);
+    const { center: [cx, cy, surfaceZ], scale } = resolveSurfaceConstrainedBillboardPlacement(
+      sprite, cameraRight, submittedHalfWidth, cameraPosition
+    );
+    const halfWidth = submittedHalfWidth * scale;
+    const halfHeight = submittedHalfHeight * scale;
     const cz = anchorMode === 'floor' ? surfaceZ + halfHeight : surfaceZ;
 
     const rx = cameraRight[0] * halfWidth;
@@ -391,12 +463,17 @@ export class WebGLRendererHost {
     return { drawCalls, texturedDrawCalls };
   }
 
-  drawWorldSprites({ sprites, viewProjection, cameraRight, viewerX, viewerY }) {
+  drawWorldSprites({ sprites, viewProjection, cameraRight, viewerX, viewerY, viewerZ }) {
     const gl = this.gl;
     const resolvedSprites = sprites.map((sprite) => {
       const textureRecord = this.textureRegistry.get(sprite.textureKey);
       const dimensions = resolveSpriteDimensions(sprite, textureRecord);
-      const center = resolveSurfaceConstrainedBillboardCenter(sprite, cameraRight, dimensions.width * 0.5);
+      const { center } = resolveSurfaceConstrainedBillboardPlacement(
+        sprite,
+        cameraRight,
+        dimensions.width * 0.5,
+        { x: viewerX, y: viewerY, z: viewerZ }
+      );
       return { sprite, textureRecord, dimensions, center };
     });
     const sorted = resolvedSprites.sort((a, b) => {
@@ -429,7 +506,8 @@ export class WebGLRendererHost {
           height: dimensions.height
         },
         cameraRight,
-        [0, 0, 1]
+        [0, 0, 1],
+        { x: viewerX, y: viewerY, z: viewerZ }
       );
 
       if (this.drawQuad({
@@ -527,7 +605,8 @@ export class WebGLRendererHost {
       viewProjection,
       cameraRight,
       viewerX: camera.x,
-      viewerY: camera.y
+      viewerY: camera.y,
+      viewerZ: camera.z
     });
     const overlayDraws = this.drawOverlays(overlays);
 
