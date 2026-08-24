@@ -12,8 +12,8 @@ function unpackColor(colorHex) {
   return [r, g, b, 1];
 }
 
-function getGroupKey(material, projection) {
-  return `${material?.key ?? '__fallback_flat__'}\u0000${projection}`;
+function getGroupKey(material, projection, surfaceType) {
+  return `${material?.key ?? '__fallback_flat__'}\u0000${projection}\u0000${surfaceType}`;
 }
 
 /** Builds packed static mesh buffers and stats from GPU scene primitives. */
@@ -41,7 +41,7 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
   };
 
   const getGroup = (material, fallbackColor, surfaceType, projection = 'world') => {
-    const groupKey = getGroupKey(material, projection);
+    const groupKey = getGroupKey(material, projection, surfaceType);
     if (!groupIndexMap.has(groupKey)) {
       groupIndexMap.set(groupKey, {
         materialKey: material?.key ?? null,
@@ -136,7 +136,10 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
   for (const floor of gpuScene.floors) {
     const color = unpackColor(floor.color ?? 0x7f7f7f);
     for (const tri of floor.triangles) {
-      const [baseA, baseB, baseC] = tri.vertices;
+      const [baseA, originalB, originalC] = tri.vertices;
+      const cross = ((originalB.x - baseA.x) * (originalC.y - baseA.y)) - ((originalB.y - baseA.y) * (originalC.x - baseA.x));
+      const baseB = cross >= 0 ? originalB : originalC;
+      const baseC = cross >= 0 ? originalC : originalB;
       const a = { ...baseA, lightLevel: floor.lightLevel ?? 1 };
       const b = { ...baseB, lightLevel: floor.lightLevel ?? 1 };
       const c = { ...baseC, lightLevel: floor.lightLevel ?? 1 };
@@ -159,7 +162,10 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
   for (const ceiling of gpuScene.ceilings) {
     const color = unpackColor(ceiling.color ?? 0xa0a0a0);
     for (const tri of ceiling.triangles) {
-      const [baseA, baseB, baseC] = tri.vertices;
+      const [baseA, originalB, originalC] = tri.vertices;
+      const cross = ((originalB.x - baseA.x) * (originalC.y - baseA.y)) - ((originalB.y - baseA.y) * (originalC.x - baseA.x));
+      const baseB = cross >= 0 ? originalB : originalC;
+      const baseC = cross >= 0 ? originalC : originalB;
       const a = { ...baseA, lightLevel: ceiling.lightLevel ?? 1 };
       const b = { ...baseB, lightLevel: ceiling.lightLevel ?? 1 };
       const c = { ...baseC, lightLevel: ceiling.lightLevel ?? 1 };

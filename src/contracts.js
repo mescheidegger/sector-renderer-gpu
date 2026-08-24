@@ -10,6 +10,7 @@
  * @property {string|null} [material] Material key resolved directly through the TextureProvider or through a configured material animation; null/omitted uses flat color.
  * @property {number} [color=0xffffff] RGB fallback tint encoded as 0xRRGGBB.
  * @property {RendererId|null} [portalTo] Exact ID of the sector behind this wall.
+ * @property {{sectorId:RendererId,bottomZ:number,topZ:number}[]} [portalLinks] Explicit vertically partitioned portal neighbors.
  * @property {number} [uvScale] Positive world units per horizontal texture repeat.
  * @typedef {Object} RendererSector
  * @property {RendererId} id Unique ID (also unique after String(id)).
@@ -138,6 +139,9 @@ export function assertRendererWorld(world) {
       }
       if (wall.a === wall.b) fail(`Sector "${key}" wall ${wallIndex} must reference two different vertices.`);
       assertMaterialKey(wall.material, `Sector "${key}" wall ${wallIndex} material`);
+      if (wall.portalLinks != null && !Array.isArray(wall.portalLinks)) {
+        fail(`Sector "${key}" wall ${wallIndex} portalLinks must be an array.`);
+      }
     });
   });
   world.sectors.forEach((sector) => {
@@ -149,6 +153,29 @@ export function assertRendererWorld(world) {
       }
     }
     sector.walls.forEach((wall, wallIndex) => {
+      if (wall.portalTo != null && (wall.portalLinks?.length ?? 0) > 0) {
+        fail(`Sector "${sectorKey}" wall ${wallIndex} cannot combine portalTo with portalLinks.`);
+      }
+      const intervals = [];
+      for (const link of wall.portalLinks ?? []) {
+        assertRendererId(link.sectorId, `Sector "${sectorKey}" wall ${wallIndex} portalLinks sectorId`);
+        if (!sectorById.has(link.sectorId) || !Number.isFinite(link.bottomZ) || !Number.isFinite(link.topZ) || !(link.topZ > link.bottomZ)) {
+          fail(`Sector "${sectorKey}" wall ${wallIndex} has invalid portalLinks entry.`);
+        }
+        const target = sectorById.get(link.sectorId);
+        const sharedBottomZ = Math.max(sector.floor, target.floor);
+        const sharedTopZ = Math.min(sector.ceil, target.ceil);
+        if (link.bottomZ < sharedBottomZ || link.topZ > sharedTopZ) {
+          fail(`Sector "${sectorKey}" wall ${wallIndex} portalLinks interval must lie inside shared vertical extent ${sharedBottomZ}..${sharedTopZ}.`);
+        }
+        intervals.push(link);
+      }
+      intervals.sort((left, right) => left.bottomZ - right.bottomZ);
+      for (let index = 1; index < intervals.length; index += 1) {
+        if (intervals[index].bottomZ < intervals[index - 1].topZ) {
+          fail(`Sector "${sectorKey}" wall ${wallIndex} portalLinks intervals must not overlap.`);
+        }
+      }
       if (wall.portalTo == null) return;
       assertRendererId(wall.portalTo, `Sector "${sectorKey}" wall ${wallIndex} portalTo`);
       if (!sectorById.has(wall.portalTo)) {

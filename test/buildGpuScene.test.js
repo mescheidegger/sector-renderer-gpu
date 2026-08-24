@@ -135,7 +135,7 @@ test('emits lower and upper bands around a height-difference portal', () => {
   assertValidSceneWalls(portalBands);
 });
 
-test('dynamicSectorIds excludes the dynamic sector floor and owned walls only', () => {
+test('dynamicSectorIds excludes the dynamic floor and walls while preserving static exteriors', () => {
   const world = { ...connectedSectorMap(), dynamicSectorIds: ['right'] };
   const scene = buildGpuScene(world);
 
@@ -145,6 +145,44 @@ test('dynamicSectorIds excludes the dynamic sector floor and owned walls only', 
   assert.equal(scene.walls.length, 3, 'the static sector retains its three exterior walls');
   assert.equal(scene.stats.floorPrimitives, 1);
   assert.equal(scene.stats.ceilingPrimitives, 2);
+});
+
+test('a seam touching a dynamic sector contributes no static height-difference bands', () => {
+  const world = {
+    ...connectedSectorMap({ rightFloor: 2, rightCeil: 5 }),
+    dynamicSectorIds: ['right']
+  };
+  const scene = buildGpuScene(world);
+
+  assert.equal(scene.walls.length, 3, 'only the static sector exterior walls remain');
+  assert.equal(scene.walls.some(({ seamParticipants }) =>
+    seamParticipants?.some(({ sectorId }) => sectorId === 'right')
+  ), false);
+  assert.equal(scene.walls.some(({ kind }) => kind === 'portal_lower' || kind === 'portal_upper'), false);
+});
+
+test('reciprocal portalLinks delegate the independent static-side seam to the dynamic sector', () => {
+  const world = connectedSectorMap({ rightFloor: 2 });
+  const leftWall = world.sectors[0].walls[1];
+  const rightWall = world.sectors[1].walls[3];
+  leftWall.portalTo = null;
+  rightWall.portalTo = null;
+  leftWall.portalLinks = [{ sectorId: 'right', bottomZ: 2, topZ: 6 }];
+  rightWall.portalLinks = [{ sectorId: 'left', bottomZ: 2, topZ: 6 }];
+  world.dynamicSectorIds = ['right'];
+
+  const investigated = buildGpuScene(world, {
+    seamDebug: { enabled: true, targetWallRef: { sectorId: 'left', wallIndex: 1 } }
+  });
+  assert.deepEqual(
+    investigated.seamDebug.preDedupe.map(({ sectorId, kind, bottomZ, topZ }) => ({ sectorId, kind, bottomZ, topZ })),
+    [{ sectorId: 'left', kind: 'portal_lower', bottomZ: 0, topZ: 2 }],
+    'the independent static-side wall produces a band before dynamic filtering'
+  );
+  assert.equal(investigated.walls.some(({ ownerSectorId, ownerWallIndex }) =>
+    (ownerSectorId === 'left' && ownerWallIndex === 1) ||
+    (ownerSectorId === 'right' && ownerWallIndex === 3)
+  ), false, 'neither reciprocal physical wall survives in the static GPU scene');
 });
 
 test('generic portal opening bounds emit lower and upper bands around the open region', () => {

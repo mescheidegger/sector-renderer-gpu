@@ -265,6 +265,22 @@ function stitchOffsetWallCorners(walls) {
   return walls;
 }
 
+function wallPrimitiveTouchesDynamicSector(wall, dynamicSectorIds, sectorById) {
+  if (dynamicSectorIds.has(wall.ownerSectorId)) {
+    return true;
+  }
+  if (wall.seamParticipants?.some(({ sectorId }) => dynamicSectorIds.has(sectorId))) {
+    return true;
+  }
+
+  const ownerSector = sectorById.get(wall.ownerSectorId);
+  const ownerWall = ownerSector?.walls?.[wall.ownerWallIndex];
+  return (
+    (ownerWall?.portalTo != null && dynamicSectorIds.has(ownerWall.portalTo)) ||
+    ownerWall?.portalLinks?.some(({ sectorId }) => dynamicSectorIds.has(sectorId))
+  );
+}
+
 /** Builds the complete GPU scene bundle (walls/floors/ceilings + stats) from the normalized sector render world. */
 export function buildGpuScene(world, options = {}) {
   assertRendererWorld(world);
@@ -335,7 +351,7 @@ export function buildGpuScene(world, options = {}) {
       return true;
     }
 
-    if (dynamicSectorIds.has(wall.ownerSectorId)) {
+    if (wallPrimitiveTouchesDynamicSector(wall, dynamicSectorIds, sectorById)) {
       return false;
     }
 

@@ -31,16 +31,16 @@ test('groups shared material triangles and separates distinct material keys', ()
   assert.equal(result.stats.texturedGroupCount, 4);
 });
 
-test('packs missing materials into one valid fallback group', () => {
+test('packs missing materials into surface-compatible fallback groups', () => {
   const map = singleSectorMap({ wallMaterial: null, floorMaterial: null });
   delete map.sectors[0].ceilingMaterial;
   const scene = buildGpuScene(map);
   const result = buildStaticMeshFromGpuScene(scene);
 
   assertValidMesh(result);
-  assert.equal(result.mesh.groups.length, 1);
-  assert.equal(result.mesh.groups[0].materialKey, null);
-  assert.equal(result.mesh.groups[0].indexCount, result.mesh.indices.length);
+  assert.equal(result.mesh.groups.length, 3);
+  assert.ok(result.mesh.groups.every(({ materialKey }) => materialKey === null));
+  assert.equal(result.mesh.groups.reduce((sum, group) => sum + group.indexCount, 0), result.mesh.indices.length);
   assert.equal(result.stats.texturedGroupCount, 0);
 });
 
@@ -53,6 +53,16 @@ test('separates sky and world projection groups using the same material', () => 
 
   assert.deepEqual(shared.map((group) => group.projection).sort(), ['sky', 'world']);
   assert.equal(shared.reduce((count, group) => count + group.indexCount, 0), 12);
+});
+
+test('separates wall, floor, and ceiling groups sharing material and projection', () => {
+  const map = singleSectorMap({ wallMaterial: 'shared', floorMaterial: 'shared', ceilingMaterial: 'shared' });
+  map.sectors[0].ceilingProjection = 'world';
+  const result = buildStaticMeshFromGpuScene(buildGpuScene(map));
+  const shared = result.mesh.groups.filter(({ materialKey, projection }) => materialKey === 'shared' && projection === 'world');
+
+  assert.deepEqual(shared.map(({ surfaceType }) => surfaceType).sort(), ['ceiling', 'floor', 'wall']);
+  assert.ok(shared.every(({ indexCount }) => indexCount > 0));
 });
 
 test('authored world ceiling UVs remain planar when projection is omitted or world', () => {

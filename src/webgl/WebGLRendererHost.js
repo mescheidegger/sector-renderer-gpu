@@ -440,6 +440,12 @@ export class WebGLRendererHost {
     let texturedDrawCalls = 0;
 
     for (const group of this.meshBuffers.groups) {
+      if (group.surfaceType === 'floor' || group.surfaceType === 'ceiling') {
+        gl.enable?.(gl.CULL_FACE);
+        gl.cullFace?.(gl.BACK);
+      } else {
+        gl.disable?.(gl.CULL_FACE);
+      }
       const resolvedKey = resolveAnimatedMaterialKey(group.materialKey, timeSeconds, this.materialAnimations);
       const textureRecord = this.textureRegistry.get(resolvedKey);
       const useTexture = textureRecord && !textureRecord.failed ? 1 : 0;
@@ -459,6 +465,7 @@ export class WebGLRendererHost {
       );
       drawCalls += 1;
     }
+    gl.disable?.(gl.CULL_FACE);
 
     return { drawCalls, texturedDrawCalls };
   }

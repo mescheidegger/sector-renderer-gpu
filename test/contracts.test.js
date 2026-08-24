@@ -76,6 +76,28 @@ test('renderer world boundary validates exact portal and parent sector IDs', () 
   );
 });
 
+test('renderer world boundary validates vertically partitioned portal links', () => {
+  const target = { ...sector('target'), floor: 1, ceil: 3 };
+  const source = { ...sector('source'), floor: 0, ceil: 4 };
+  const withLinks = (portalLinks, portalTo = null) => ({
+    sectors: [target, { ...source, walls: [{ a: 0, b: 1, portalTo, portalLinks }] }]
+  });
+
+  assert.doesNotThrow(() => api.assertRendererWorld(withLinks([
+    { sectorId: 'target', bottomZ: 1, topZ: 2 },
+    { sectorId: 'target', bottomZ: 2, topZ: 3 }
+  ])));
+  assert.throws(() => api.assertRendererWorld(withLinks([{ sectorId: 'target', bottomZ: 1, topZ: 2 }], 'target')), /cannot combine/);
+  assert.throws(() => api.assertRendererWorld(withLinks([{ sectorId: 'target', bottomZ: 2, topZ: 2 }])), /invalid portalLinks/);
+  assert.throws(() => api.assertRendererWorld(withLinks([{ sectorId: 'missing', bottomZ: 1, topZ: 2 }])), /invalid portalLinks/);
+  assert.throws(() => api.assertRendererWorld(withLinks([
+    { sectorId: 'target', bottomZ: 1, topZ: 2.5 },
+    { sectorId: 'target', bottomZ: 2, topZ: 3 }
+  ])), /must not overlap/);
+  assert.throws(() => api.assertRendererWorld(withLinks([{ sectorId: 'target', bottomZ: 0, topZ: 2 }])), /shared vertical extent/);
+  assert.throws(() => api.assertRendererWorld(withLinks([{ sectorId: 'target', bottomZ: 2, topZ: 4 }])), /shared vertical extent/);
+});
+
 test('renderer world boundary rejects IDs outside string or finite number', () => {
   for (const id of [{}, [], true, Symbol('sector'), NaN, Infinity]) {
     assert.throws(() => api.assertRendererWorld({ sectors: [sector(id)] }), /id must be a string or finite number/);

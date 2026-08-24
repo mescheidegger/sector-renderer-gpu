@@ -34,7 +34,9 @@ function areOppositeSides(left, right) {
 }
 
 function hasPortalRelationship(left, right) {
-  return left.wall?.portalTo === right.sector.id || right.wall?.portalTo === left.sector.id;
+  return left.wall?.portalTo === right.sector.id || right.wall?.portalTo === left.sector.id ||
+    left.wall?.portalLinks?.some(({ sectorId }) => sectorId === right.sector.id) ||
+    right.wall?.portalLinks?.some(({ sectorId }) => sectorId === left.sector.id);
 }
 
 function scorePair(left, right) {
@@ -147,6 +149,16 @@ function buildPhysicalSeamUnitsForInterval(participants) {
   const sorted = sortEntries(participants);
   const used = new Set();
   const units = [];
+
+  // Multi-level portal walls resolve their own vertical intervals. Keeping
+  // them independent avoids incorrectly pairing one XY seam with only one of
+  // several stacked neighbors.
+  for (const entry of sorted) {
+    if (entry.wall?.portalLinks?.length) {
+      units.push([entry]);
+      used.add(entry);
+    }
+  }
 
   // First pass: portal relationships are the strongest signal.
   for (const entry of sorted) {

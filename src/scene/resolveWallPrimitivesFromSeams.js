@@ -287,6 +287,44 @@ function resolveWallSpansForSeam({
 
   if (!opposite) {
     const ownerSector = owner.sector;
+    if (owner.wall.portalLinks?.length) {
+      stats.portalWallsProcessed += 1;
+      const links = owner.wall.portalLinks
+        .map((link) => ({
+          ...link,
+          bottomZ: Math.max(ownerSector.floor, link.bottomZ),
+          topZ: Math.min(ownerSector.ceil, link.topZ)
+        }))
+        .filter((link) => link.topZ > link.bottomZ + GEOMETRY_EPSILON)
+        .sort((a, b) => a.bottomZ - b.bottomZ);
+      const levels = [...new Set([ownerSector.floor, ownerSector.ceil, ...links.flatMap((link) => [link.bottomZ, link.topZ])])].sort((a, b) => a - b);
+      let emittedBand = false;
+      for (let index = 0; index < levels.length - 1; index += 1) {
+        const bottomZ = levels[index];
+        const topZ = levels[index + 1];
+        const openLink = links.find((link) => bottomZ >= link.bottomZ - GEOMETRY_EPSILON && topZ <= link.topZ + GEOMETRY_EPSILON);
+        if (openLink) continue;
+        const nextLink = links.find((link) => link.bottomZ >= topZ - GEOMETRY_EPSILON);
+        const kind = nextLink ? 'portal_lower' : 'portal_upper';
+        emittedBand = Boolean(emitFromEntry({
+          entry: owner,
+          otherSector: nextLink ? sectorById.get(nextLink.sectorId) : null,
+          kind,
+          bottomZ,
+          topZ,
+          spanIdSuffix: `vertical-link-gap-${index}`
+        })) || emittedBand;
+      }
+      stats.portalOpeningsEmitted += links.length;
+      if (!emittedBand) stats.fullyOpenPortalsSkipped += 1;
+      if (seamDebugResolution) {
+        seamDebugResolution.treatedAsPortal = true;
+        seamDebugResolution.splitLevels = levels;
+        seamDebugResolution.portalLinks = links;
+        seamDebugState.resolution = seamDebugResolution;
+      }
+      return;
+    }
     const backSectorFromPortal = owner.wall.portalTo != null ? (sectorById.get(owner.wall.portalTo) ?? null) : null;
     const treatAsPortal = Boolean(backSectorFromPortal);
 
