@@ -262,7 +262,11 @@ export class WebGLRendererHost {
   }
 
   resize(width, height, { pixelRatio = 1 } = {}) {
-    const { pixelWidth, pixelHeight } = resolveViewportSize(width, height, pixelRatio);
+    const viewport = resolveViewportSize(width, height, pixelRatio);
+    const { pixelWidth, pixelHeight } = viewport;
+
+    this.viewportWidth = viewport.width;
+    this.viewportHeight = viewport.height;
 
     this.canvas.width = pixelWidth;
     this.canvas.height = pixelHeight;
@@ -270,7 +274,7 @@ export class WebGLRendererHost {
     this.canvas.style.height = `${height}px`;
 
     this.gl.viewport(0, 0, pixelWidth, pixelHeight);
-    this.aspect = pixelWidth / pixelHeight;
+    this.aspect = this.viewportWidth / this.viewportHeight;
   }
 
   setupVertexAttributes(vertexBuffer) {
@@ -340,8 +344,8 @@ export class WebGLRendererHost {
   }
 
   buildOverlayQuad(overlay) {
-    const width = this.canvas.width;
-    const height = this.canvas.height;
+    const width = this.viewportWidth;
+    const height = this.viewportHeight;
 
     const centerX = (overlay.anchorX * width) + (overlay.offsetX ?? 0);
     const centerY = (overlay.anchorY * height) + (overlay.offsetY ?? 0);

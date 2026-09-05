@@ -71,7 +71,19 @@
  * @property {[number[],number[],number[],number[]]} [uvs] Four normalized uploaded-image texture coordinates.
  * @property {boolean} [flipX=false] Reverse horizontal texture sampling.
  * @property {boolean} [flipV=false] Reverse vertical texture sampling.
- * @typedef {{textureKey:string,anchorX:number,anchorY:number,offsetX?:number,offsetY?:number,width:number,height:number,pivotX?:number,pivotY?:number,rotation?:number,opacity?:number,order?:number}} RendererOverlay
+ * @typedef {Object} RendererOverlay
+ * @property {string} textureKey
+ * @property {number} anchorX Normalized horizontal viewport anchor.
+ * @property {number} anchorY Normalized vertical viewport anchor.
+ * @property {number} [offsetX=0] Horizontal offset in logical viewport pixels.
+ * @property {number} [offsetY=0] Vertical offset in logical viewport pixels.
+ * @property {number} width Width in logical viewport pixels.
+ * @property {number} height Height in logical viewport pixels.
+ * @property {number} [pivotX=0.5] Normalized horizontal pivot within the overlay.
+ * @property {number} [pivotY=0.5] Normalized vertical pivot within the overlay.
+ * @property {number} [rotation=0]
+ * @property {number} [opacity=1]
+ * @property {number} [order=0]
  * @typedef {{camera:RendererCamera,timeSeconds?:number,sprites?:RendererSprite[],worldQuads?:RendererWorldQuad[],overlays?:RendererOverlay[]}} RendererFrame
  * @typedef {{materialKey:string,frames:string[],frameDurationSeconds:number}} MaterialAnimation
  * @typedef {{fovY?:number,near?:number,far?:number}} RendererProjection

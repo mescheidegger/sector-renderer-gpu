@@ -7,6 +7,7 @@ import { assertTextureProvider } from './textureProvider.js';
 import { buildStaticMeshFromGpuScene } from './webgl/mesh/buildStaticMeshFromGpuScene.js';
 import { WebGLRendererHost } from './webgl/WebGLRendererHost.js';
 import { assertRendererFrame } from './contracts.js';
+import { validateMaterialAnimations } from './materials/resolveAnimatedMaterialKey.js';
 
 /**
  * Browser/WebGL facade for a sector world and its per-frame presentation.
@@ -27,12 +28,14 @@ export class SectorRenderer {
     pixelRatio = 1,
     projection,
     textureProvider = null,
+    materialAnimations = [],
     debug = null
   }) {
     this.debug = debug;
     this.world = world;
 
     assertTextureProvider(textureProvider);
+    this.materialAnimations = validateMaterialAnimations(materialAnimations, textureProvider);
 
     const sceneBuild = this.buildStaticScene(world);
     this.gpuScene = sceneBuild.gpuScene;
@@ -45,7 +48,8 @@ export class SectorRenderer {
       pixelRatio,
       projection,
       mesh: sceneBuild.mesh,
-      textureProvider
+      textureProvider,
+      materialAnimations: this.materialAnimations
     });
 
     this.meshStats = sceneBuild.meshStats;
@@ -124,12 +128,13 @@ export class SectorRenderer {
   /** Draws one frame. Camera is required; presentation arrays default to empty. @param {import('./contracts.js').RendererFrame} frame */
   render(frame) {
     assertRendererFrame(frame);
-    const { camera, sprites = [], worldQuads = [], overlays = [] } = frame;
+    const { camera, sprites = [], worldQuads = [], overlays = [], timeSeconds = 0 } = frame;
     const renderStats = this.host.render({
       camera,
       sprites,
       worldQuads,
-      overlays
+      overlays,
+      timeSeconds
     });
 
     this.debugSnapshot = this.createSnapshot({
@@ -140,7 +145,8 @@ export class SectorRenderer {
   }
 
   /**
-   * Resizes the logical CSS viewport and its backing store.
+   * Resizes the logical CSS viewport and its backing store. Pixel ratio changes
+   * backing resolution only; screen-overlay dimensions remain logical pixels.
    * @param {number} width
    * @param {number} height
    * @param {{pixelRatio?:number}} [options]

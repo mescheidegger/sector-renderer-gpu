@@ -444,7 +444,9 @@ The renderer does not inspect world geometry, determine collisions, detect corne
 }
 ```
 
-`textureKey`, normalized `anchorX`/`anchorY`, and dimensions are required. Anchor origin `(0,0)` is the drawing buffer's top-left and `(1,1)` its bottom-right. Offsets and `width`/`height` are drawing-buffer pixels (therefore affected by `pixelRatio`, not logical CSS pixels). Pivots are normalized within the overlay: `(0,0)` top-left, `(0.5,0.5)` center (default), `(1,1)` bottom-right. Rotation is radians around the pivot; positive values appear clockwise on screen because screen Y grows downward. Overlays draw after the world with depth testing disabled, sorted by ascending `order` (default `0`).
+`textureKey`, normalized `anchorX`/`anchorY`, and dimensions are required. Anchor origin `(0,0)` is the logical viewport's top-left and `(1,1)` its bottom-right. Overlay `offsetX`, `offsetY`, `width`, and `height` are logical viewport pixels. Pivots are normalized within the overlay: `(0,0)` top-left, `(0.5,0.5)` center (default), `(1,1)` bottom-right. Rotation is radians around the pivot; positive values appear clockwise on screen because screen Y grows downward. Overlays draw after the world with depth testing disabled, sorted by ascending `order` (default `0`).
+
+The renderer retains logical viewport dimensions separately from the canvas backing store. `pixelRatio` increases or decreases backing-store and WebGL viewport resolution, but never changes overlay layout, offsets, or logical on-screen size.
 
 ## Projection
 
@@ -476,7 +478,7 @@ Constructor options:
 | `world` | Required | Valid `SectorRenderWorld`; static geometry is built immediately. |
 | `canvas` / `container` | Exactly one | A supplied canvas remains caller-owned. With a container, the renderer creates/appends a canvas and removes it on failed construction or `destroy()`. |
 | `width`, `height` | Optional, default `1280`, `720` | Positive logical CSS viewport dimensions. |
-| `pixelRatio` | Optional, default `1` | Positive finite backing-store multiplier; invalid values fall back to `1`. The renderer does not automatically read device DPR. |
+| `pixelRatio` | Optional, default `1` | Positive finite backing-store multiplier; invalid values fall back to `1`. It does not affect logical overlay dimensions, and the renderer does not automatically read device DPR. |
 | `projection` | Optional | Partial perspective override. |
 | `textureProvider` | Required | Synchronous provider described above. |
 | `debug` | Optional | Advanced seam diagnostics configuration. |
