@@ -18,6 +18,9 @@ import { resolveAnimatedMaterialKey } from '../materials/resolveAnimatedMaterial
 // Prevents coplanar precision artifacts; this is not visible presentation spacing.
 export const SURFACE_SEPARATION_EPSILON = 0.001;
 
+// Camera depth is measured in world units, so near-equal depths retain sprite.order semantics.
+const WORLD_SPRITE_DEPTH_EPSILON = 0.000001;
+
 export function writeQuadVertices(target, {
   corners,
   opacity = 1,
@@ -337,16 +340,23 @@ export class WebGLRendererHost {
     gl.vertexAttribPointer(this.attributeLocations.lightLevel, 1, gl.FLOAT, false, stride, 9 * Float32Array.BYTES_PER_ELEMENT);
   }
 
-  buildWorldBillboardQuad(sprite, cameraRight, cameraUp, cameraPosition = null) {
+  buildWorldBillboardQuad(
+    sprite,
+    cameraRight,
+    cameraUp,
+    cameraPosition = null,
+    resolvedPlacement = null
+  ) {
     const width = sprite.width ?? sprite.size ?? 1;
     const height = sprite.height ?? sprite.size ?? width;
 
     const submittedHalfWidth = width * 0.5;
     const submittedHalfHeight = height * 0.5;
     const anchorMode = sprite.anchor ?? 'center';
-    const { center: [cx, cy, surfaceZ], scale } = resolveSurfaceConstrainedBillboardPlacement(
-      sprite, cameraRight, submittedHalfWidth, cameraPosition
-    );
+    const { center: [cx, cy, surfaceZ], scale } = resolvedPlacement
+      ?? resolveSurfaceConstrainedBillboardPlacement(
+        sprite, cameraRight, submittedHalfWidth, cameraPosition
+      );
     const halfWidth = submittedHalfWidth * scale;
     const halfHeight = submittedHalfHeight * scale;
     const cz = anchorMode === 'floor' ? surfaceZ + halfHeight : surfaceZ;
@@ -509,29 +519,33 @@ export class WebGLRendererHost {
     return { drawCalls, texturedDrawCalls };
   }
 
-  drawWorldSprites({ sprites, viewProjection, cameraRight, viewerX, viewerY, viewerZ }) {
+  drawWorldSprites({
+    sprites,
+    viewProjection,
+    cameraRight,
+    cameraForward,
+    viewerX,
+    viewerY,
+    viewerZ
+  }) {
     const gl = this.gl;
     const resolvedSprites = sprites.map((sprite) => {
       const textureRecord = this.textureRegistry.get(sprite.textureKey);
       const dimensions = resolveSpriteDimensions(sprite, textureRecord);
-      const { center } = resolveSurfaceConstrainedBillboardPlacement(
+      const placement = resolveSurfaceConstrainedBillboardPlacement(
         sprite,
         cameraRight,
         dimensions.width * 0.5,
         { x: viewerX, y: viewerY, z: viewerZ }
       );
-      return { sprite, textureRecord, dimensions, center };
+      const dx = placement.center[0] - viewerX;
+      const dy = placement.center[1] - viewerY;
+      const depth = (dx * cameraForward[0]) + (dy * cameraForward[1]);
+      return { sprite, textureRecord, dimensions, placement, depth };
     });
     const sorted = resolvedSprites.sort((a, b) => {
-      const aDx = (a.center[0] ?? 0) - viewerX;
-      const aDy = (a.center[1] ?? 0) - viewerY;
-      const bDx = (b.center[0] ?? 0) - viewerX;
-      const bDy = (b.center[1] ?? 0) - viewerY;
-      const aDistanceSq = (aDx * aDx) + (aDy * aDy);
-      const bDistanceSq = (bDx * bDx) + (bDy * bDy);
-
-      if (Math.abs(aDistanceSq - bDistanceSq) > 0.000001) {
-        return bDistanceSq - aDistanceSq;
+      if (Math.abs(a.depth - b.depth) > WORLD_SPRITE_DEPTH_EPSILON) {
+        return b.depth - a.depth;
       }
 
       return (a.sprite.order ?? 0) - (b.sprite.order ?? 0);
@@ -540,7 +554,7 @@ export class WebGLRendererHost {
     gl.depthMask(false);
 
     let draws = 0;
-    for (const { sprite, textureRecord, dimensions } of sorted) {
+    for (const { sprite, textureRecord, dimensions, placement } of sorted) {
       if (!textureRecord || textureRecord.failed) {
         continue;
       }
@@ -553,7 +567,8 @@ export class WebGLRendererHost {
         },
         cameraRight,
         [0, 0, 1],
-        { x: viewerX, y: viewerY, z: viewerZ }
+        { x: viewerX, y: viewerY, z: viewerZ },
+        placement
       );
 
       if (this.drawQuad({
@@ -656,6 +671,7 @@ export class WebGLRendererHost {
       sprites,
       viewProjection,
       cameraRight,
+      cameraForward: forward,
       viewerX: camera.x,
       viewerY: camera.y,
       viewerZ: camera.z
