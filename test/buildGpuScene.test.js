@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 
 import { buildGpuScene } from '../src/buildGpuScene.js';
 import { assertValidSceneWalls } from './assertGeometry.js';
-import { connectedSectorMap, singleSectorMap } from './fixtures/syntheticMaps.js';
+import {
+  concaveSharedSolidMap,
+  connectedSectorMap,
+  rectangularSector,
+  singleSectorMap
+} from './fixtures/syntheticMaps.js';
 
 test('compiles one rectangular sector with walls, surfaces, materials, and light', () => {
   const scene = buildGpuScene(singleSectorMap());
@@ -114,6 +119,119 @@ test('compiles a reciprocal shared boundary as one fully open portal', () => {
   assert.equal(scene.stats.lowerBandPrimitives, 0);
   assert.equal(scene.walls.length, 6, 'only the six exterior walls remain');
   assert.equal(scene.walls.filter((wall) => wall.seamParticipants?.length === 2).length, 0);
+});
+
+test('pairs and inward-offsets both authored sides of a concave shared solid boundary', () => {
+  for (const variant of [
+    {},
+    { reverseWinding: true },
+    { reverseSharedWall: true },
+    { reorderWalls: true }
+  ]) {
+    const world = concaveSharedSolidMap(variant);
+    const scene = buildGpuScene(world, {
+      seamDebug: {
+        enabled: true,
+        targetWallRef: {
+          sectorId: 'concave',
+          wallIndex: world.sharedWallIndices.concave
+        }
+      }
+    });
+    const sharedSurfaces = scene.walls.filter((wall) =>
+      wall.sharedSolidOffset &&
+      wall.sourceA.x === 2 && wall.sourceB.x === 2 &&
+      Math.min(wall.sourceA.y, wall.sourceB.y) === 2 &&
+      Math.max(wall.sourceA.y, wall.sourceB.y) === 4
+    );
+
+    assert.equal(scene.seamDebug.seamFound, true);
+    assert.deepEqual(
+      new Set(scene.seamDebug.participants.map(({ sectorId }) => sectorId)),
+      new Set(['concave', 'notch'])
+    );
+    assert.equal(sharedSurfaces.length, 2);
+    assert.equal(new Set(sharedSurfaces.map(({ seamKey }) => seamKey)).size, 1);
+    assert.deepEqual(new Set(sharedSurfaces.map(({ ownerSectorId }) => ownerSectorId)), new Set(['concave', 'notch']));
+    assert.deepEqual(new Set(sharedSurfaces.map(({ material }) => material?.key)), new Set(['concave-side', 'notch-side']));
+
+    const byOwner = new Map(sharedSurfaces.map((wall) => [wall.ownerSectorId, wall]));
+    assert.ok(byOwner.get('concave').x0 < 2 && byOwner.get('concave').x1 < 2);
+    assert.ok(byOwner.get('notch').x0 > 2 && byOwner.get('notch').x1 > 2);
+    assert.deepEqual(
+      {
+        color: byOwner.get('concave').color,
+        lightLevel: byOwner.get('concave').lightLevel,
+        uvScale: byOwner.get('concave').uvScale,
+        uvUOffset: byOwner.get('concave').uvUOffset,
+        wallIndex: byOwner.get('concave').ownerWallIndex
+      },
+      { color: 0x123456, lightLevel: 0.35, uvScale: 2, uvUOffset: 0, wallIndex: world.sharedWallIndices.concave }
+    );
+    assert.deepEqual(
+      {
+        color: byOwner.get('notch').color,
+        lightLevel: byOwner.get('notch').lightLevel,
+        uvScale: byOwner.get('notch').uvScale,
+        uvUOffset: byOwner.get('notch').uvUOffset,
+        wallIndex: byOwner.get('notch').ownerWallIndex
+      },
+      { color: 0xabcdef, lightLevel: 0.65, uvScale: 3, uvUOffset: 0, wallIndex: world.sharedWallIndices.notch }
+    );
+    assertValidSceneWalls(sharedSurfaces);
+    assert.ok(sharedSurfaces.every((wall) => Math.hypot(wall.x1 - wall.x0, wall.y1 - wall.y0) > 0));
+  }
+});
+
+test('preserves convex shared-solid materials and opposite inward offsets', () => {
+  const left = rectangularSector({ id: 'left', x0: 0, x1: 4, wallMaterial: 'left-side' });
+  const right = rectangularSector({ id: 'right', x0: 4, x1: 8, wallMaterial: 'right-side' });
+  const scene = buildGpuScene({ sectors: [left, right] });
+  const shared = scene.walls.filter((wall) => wall.sharedSolidOffset);
+
+  assert.equal(scene.stats.indexedSharedWallSeams, 1);
+  assert.equal(shared.length, 2);
+  assert.deepEqual(new Set(shared.map((wall) => wall.material?.key)), new Set(['left-side', 'right-side']));
+  assert.ok(shared.find((wall) => wall.ownerSectorId === 'left').x0 < 4);
+  assert.ok(shared.find((wall) => wall.ownerSectorId === 'right').x0 > 4);
+});
+
+test('keeps local interior direction and UV continuity for a seam sliced from a longer wall', () => {
+  const left = {
+    ...rectangularSector({ id: 'left', x0: 0, x1: 4, y1: 8 }),
+    vertices: [
+      { x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 },
+      { x: 4, y: 8 }, { x: 0, y: 8 }
+    ],
+    walls: [{ a: 1, b: 3, material: 'long-side', uvScale: 2 }]
+  };
+  const right = {
+    ...rectangularSector({ id: 'right', x0: 4, x1: 8, y0: 2, y1: 6 }),
+    walls: [{ a: 3, b: 0, material: 'short-side', uvScale: 4 }]
+  };
+  const scene = buildGpuScene({ sectors: [left, right] });
+  const shared = scene.walls.filter((wall) => wall.sharedSolidOffset);
+
+  assert.equal(scene.stats.indexedSharedWallSeams, 1);
+  assert.equal(shared.length, 2);
+  assert.ok(shared.find((wall) => wall.ownerSectorId === 'left').x0 < 4);
+  assert.ok(shared.find((wall) => wall.ownerSectorId === 'right').x0 > 4);
+  assert.equal(shared.find((wall) => wall.ownerSectorId === 'left').uvUOffset, 2);
+  assert.equal(shared.find((wall) => wall.ownerSectorId === 'right').uvUOffset, 0);
+  assertValidSceneWalls(shared);
+});
+
+test('does not pair unrelated overlapping collinear walls on the same side', () => {
+  const first = rectangularSector({ id: 'first', x0: 0, x1: 4 });
+  const second = rectangularSector({ id: 'second', x0: 0, x1: 4 });
+  first.walls = [first.walls[0]];
+  second.walls = [second.walls[0]];
+  const scene = buildGpuScene({ sectors: [first, second] }, {
+    seamDebug: { enabled: true, targetWallRef: { sectorId: 'first', wallIndex: 0 } }
+  });
+
+  assert.equal(scene.stats.indexedSharedWallSeams, 0);
+  assert.deepEqual(scene.seamDebug.participants, [{ sectorId: 'first', wallIndex: 0 }]);
 });
 
 test('emits lower and upper bands around a height-difference portal', () => {

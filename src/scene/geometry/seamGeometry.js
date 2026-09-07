@@ -127,30 +127,110 @@ export function pointOnLineFromParameter(line, t) {
   };
 }
 
-/** Computes the average center of a sector polygon. */
-export function computeSectorCentroid(vertices) {
-  if (!Array.isArray(vertices) || vertices.length === 0) {
-    return { x: 0, y: 0 };
+function polygonWindingSign(vertices) {
+  let twiceArea = 0;
+  for (let index = 0; index < vertices.length; index += 1) {
+    const current = vertices[index];
+    const next = vertices[(index + 1) % vertices.length];
+    twiceArea += (current.x * next.y) - (next.x * current.y);
   }
-
-  let sumX = 0;
-  let sumY = 0;
-
-  for (const vertex of vertices) {
-    sumX += vertex.x;
-    sumY += vertex.y;
-  }
-
-  return {
-    x: sumX / vertices.length,
-    y: sumY / vertices.length
-  };
+  return twiceArea > 0 ? 1 : twiceArea < 0 ? -1 : 0;
 }
 
-/** Returns signed sector-side distance relative to a normalized line. */
-export function computeSectorSideForLine(sector, line) {
-  const centroid = computeSectorCentroid(sector.vertices);
-  return ((line.nx * centroid.x) + (line.ny * centroid.y)) - line.offset;
+function signedDistanceToLine(point, line) {
+  return ((line.nx * point.x) + (line.ny * point.y)) - line.offset;
+}
+
+function nearestOffLineDistance(vertices, startIndex, step, line) {
+  for (let offset = 0; offset < vertices.length; offset += 1) {
+    const index = (startIndex + (offset * step) + vertices.length) % vertices.length;
+    const distance = Math.abs(signedDistanceToLine(vertices[index], line));
+    if (distance > GEOMETRY_EPSILON) {
+      return distance;
+    }
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Resolves which canonical side of a wall line contains the sector interior.
+ *
+ * The ordered polygon ring is authoritative: for each traversal edge covered by
+ * the authored wall, a counter-clockwise polygon is interior-left and a
+ * clockwise polygon is interior-right. This stays local to the boundary even
+ * when a concave polygon's center lies across the wall's infinite line.
+ */
+export function computeWallInteriorSide(sector, wall, line) {
+  const vertices = sector?.vertices;
+  const wallA = vertices?.[wall?.a];
+  const wallB = vertices?.[wall?.b];
+  if (!Array.isArray(vertices) || vertices.length < 3 || !wallA || !wallB || !line) {
+    return { sign: 0, distance: 0 };
+  }
+
+  const windingSign = polygonWindingSign(vertices);
+  if (windingSign === 0) {
+    return { sign: 0, distance: 0 };
+  }
+
+  const wallT0 = Math.min(
+    projectPointToLineParameter(wallA, line),
+    projectPointToLineParameter(wallB, line)
+  );
+  const wallT1 = Math.max(
+    projectPointToLineParameter(wallA, line),
+    projectPointToLineParameter(wallB, line)
+  );
+  let interiorSign = 0;
+  let localDistance = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < vertices.length; index += 1) {
+    const edgeA = vertices[index];
+    const edgeB = vertices[(index + 1) % vertices.length];
+    if (
+      Math.abs(signedDistanceToLine(edgeA, line)) > GEOMETRY_EPSILON ||
+      Math.abs(signedDistanceToLine(edgeB, line)) > GEOMETRY_EPSILON
+    ) {
+      continue;
+    }
+
+    const edgeT0 = projectPointToLineParameter(edgeA, line);
+    const edgeT1 = projectPointToLineParameter(edgeB, line);
+    const overlapStart = Math.max(wallT0, Math.min(edgeT0, edgeT1));
+    const overlapEnd = Math.min(wallT1, Math.max(edgeT0, edgeT1));
+    if (!(overlapEnd > overlapStart + GEOMETRY_EPSILON)) {
+      continue;
+    }
+
+    const traversalDelta = edgeT1 - edgeT0;
+    if (Math.abs(traversalDelta) <= GEOMETRY_EPSILON) {
+      continue;
+    }
+
+    const edgeInteriorSign = windingSign * Math.sign(traversalDelta);
+    if (interiorSign !== 0 && edgeInteriorSign !== interiorSign) {
+      return { sign: 0, distance: 0 };
+    }
+    interiorSign = edgeInteriorSign;
+
+    // Preserve a local magnitude for deterministic ambiguous-pair scoring. Its
+    // sign comes from topology, not from where these neighboring vertices lie.
+    localDistance = Math.min(
+      localDistance,
+      nearestOffLineDistance(vertices, index - 1, -1, line),
+      nearestOffLineDistance(vertices, index + 2, 1, line)
+    );
+  }
+
+  if (interiorSign === 0) {
+    return { sign: 0, distance: 0 };
+  }
+
+  const magnitude = Number.isFinite(localDistance) ? localDistance : 0;
+  return {
+    sign: interiorSign,
+    distance: interiorSign * magnitude
+  };
 }
 
 /** Offsets a wall segment slightly toward sector interior to avoid surface overlap. */
@@ -166,18 +246,13 @@ export function offsetWallTowardsSectorInterior(entry, distance) {
     return { a, b };
   }
 
-  const midX = (a.x + b.x) * 0.5;
-  const midY = (a.y + b.y) * 0.5;
-  const centroid = computeSectorCentroid(entry.sector.vertices);
+  const interiorSide = entry.sideSign || computeWallInteriorSide(entry.sector, entry.wall, entry.line).sign;
+  if (interiorSide === 0 || !entry.line) {
+    return { a, b };
+  }
 
-  const leftNormalX = -dy / length;
-  const leftNormalY = dx / length;
-  const toCenterX = centroid.x - midX;
-  const toCenterY = centroid.y - midY;
-  const normalSign = ((leftNormalX * toCenterX) + (leftNormalY * toCenterY)) >= 0 ? 1 : -1;
-
-  const offsetX = leftNormalX * normalSign * distance;
-  const offsetY = leftNormalY * normalSign * distance;
+  const offsetX = entry.line.nx * interiorSide * distance;
+  const offsetY = entry.line.ny * interiorSide * distance;
 
   return {
     a: { x: a.x + offsetX, y: a.y + offsetY },

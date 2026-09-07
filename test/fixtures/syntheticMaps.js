@@ -85,3 +85,90 @@ export function connectedSectorMap({
 
   return { sectors: [left, right] };
 }
+
+function makePolygonSector({
+  id,
+  points,
+  reverseWinding,
+  reverseSharedWall,
+  reorderWalls,
+  sharedMaterial,
+  wallMaterial,
+  lightLevel,
+  wallColor,
+  uvScale
+}) {
+  const vertices = (reverseWinding ? [...points].reverse() : points)
+    .map(([x, y]) => ({ x, y }));
+  const walls = makeWalls(vertices.length, wallMaterial);
+  let sharedWallIndex = walls.findIndex(({ a, b }) => {
+    const endpoints = [vertices[a], vertices[b]];
+    return endpoints.every(({ x, y }) => x === 2 && (y === 2 || y === 4));
+  });
+  walls[sharedWallIndex] = {
+    ...walls[sharedWallIndex],
+    material: sharedMaterial,
+    color: wallColor,
+    uvScale
+  };
+  if (reverseSharedWall) {
+    const wall = walls[sharedWallIndex];
+    walls[sharedWallIndex] = { ...wall, a: wall.b, b: wall.a };
+  }
+  if (reorderWalls) {
+    walls.reverse();
+    sharedWallIndex = walls.length - 1 - sharedWallIndex;
+  }
+
+  return {
+    id,
+    floor: 0,
+    ceil: 6,
+    lightLevel,
+    floorMaterial: `${id}-floor`,
+    ceilingMaterial: `${id}-ceiling`,
+    vertices,
+    walls,
+    sharedWallIndex
+  };
+}
+
+/** Exact C-shaped sector and rectangular notch neighbor used by seam regressions. */
+export function concaveSharedSolidMap({
+  reverseWinding = false,
+  reverseSharedWall = false,
+  reorderWalls = false
+} = {}) {
+  const concave = makePolygonSector({
+    id: 'concave',
+    points: [[0, 0], [6, 0], [6, 2], [2, 2], [2, 4], [6, 4], [6, 6], [0, 6]],
+    reverseWinding,
+    reverseSharedWall,
+    reorderWalls,
+    sharedMaterial: 'concave-side',
+    wallMaterial: 'concave-exterior',
+    lightLevel: 0.35,
+    wallColor: 0x123456,
+    uvScale: 2
+  });
+  const notch = makePolygonSector({
+    id: 'notch',
+    points: [[2, 2], [6, 2], [6, 4], [2, 4]],
+    reverseWinding,
+    reverseSharedWall,
+    reorderWalls,
+    sharedMaterial: 'notch-side',
+    wallMaterial: 'notch-exterior',
+    lightLevel: 0.65,
+    wallColor: 0xabcdef,
+    uvScale: 3
+  });
+
+  return {
+    sectors: [concave, notch],
+    sharedWallIndices: {
+      concave: concave.sharedWallIndex,
+      notch: notch.sharedWallIndex
+    }
+  };
+}

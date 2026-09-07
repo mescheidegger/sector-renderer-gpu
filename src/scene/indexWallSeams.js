@@ -3,7 +3,7 @@ import {
   makeCollinearLineKey,
   projectPointToLineParameter,
   dedupeSortedValues,
-  computeSectorSideForLine
+  computeWallInteriorSide
 } from './geometry/seamGeometry.js';
 
 function sortEntries(entries) {
@@ -242,8 +242,9 @@ export function indexWallSeams(map) {
       const tEnd = projectPointToLineParameter(b, line);
       const t0 = Math.min(tStart, tEnd);
       const t1 = Math.max(tStart, tEnd);
-      const sideDistance = computeSectorSideForLine(sector, line);
-      const sideSign = getSideSign(sideDistance);
+      const interiorSide = computeWallInteriorSide(sector, wall, line);
+      const sideDistance = interiorSide.distance;
+      const sideSign = getSideSign(interiorSide.sign);
 
       const entry = {
         sector,
