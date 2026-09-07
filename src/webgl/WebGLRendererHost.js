@@ -203,6 +203,11 @@ export class WebGLRendererHost {
     this.canvas = canvasTarget.canvas;
     this.ownsCanvas = canvasTarget.ownsCanvas;
     this.ownerContainer = canvasTarget.ownerContainer;
+    this.gl = null;
+    this.program = null;
+    this.meshBuffers = null;
+    this.textureRegistry = null;
+    this.dynamicBuffers = null;
     try {
       this.projection = resolveProjection(projection);
       this.materialAnimations = materialAnimations;
@@ -242,6 +247,7 @@ export class WebGLRendererHost {
       this.resize(width, height, { pixelRatio });
       this.initMs = performance.now() - initStart;
     } catch (error) {
+      this.releaseGpuResources();
       cleanupCanvasTarget(this);
       throw error;
     }
@@ -249,11 +255,30 @@ export class WebGLRendererHost {
 
   createDynamicBuffers() {
     const gl = this.gl;
-    return {
-      vertexBuffer: gl.createBuffer(),
-      indexBuffer: gl.createBuffer(),
-      indices: new Uint16Array([0, 1, 2, 0, 2, 3])
-    };
+    let vertexBuffer = null;
+    let indexBuffer = null;
+
+    try {
+      vertexBuffer = gl.createBuffer();
+      if (!vertexBuffer) {
+        throw new Error('[SectorRenderer] Dynamic vertex buffer allocation failed.');
+      }
+
+      indexBuffer = gl.createBuffer();
+      if (!indexBuffer) {
+        throw new Error('[SectorRenderer] Dynamic index buffer allocation failed.');
+      }
+
+      return {
+        vertexBuffer,
+        indexBuffer,
+        indices: new Uint16Array([0, 1, 2, 0, 2, 3])
+      };
+    } catch (error) {
+      if (indexBuffer) gl.deleteBuffer(indexBuffer);
+      if (vertexBuffer) gl.deleteBuffer(vertexBuffer);
+      throw error;
+    }
   }
 
   replaceStaticMesh(mesh) {
@@ -648,22 +673,31 @@ export class WebGLRendererHost {
     return this.textureRegistry.getStats();
   }
 
+  releaseGpuResources() {
+    if (!this.gl) return;
+
+    deleteDynamicBuffers(this.gl, this.dynamicBuffers);
+    this.dynamicBuffers = null;
+
+    this.textureRegistry?.destroy?.();
+    this.textureRegistry = null;
+
+    deleteStaticMeshBuffers(this.gl, this.meshBuffers);
+    this.meshBuffers = null;
+
+    if (this.program) {
+      this.gl.deleteProgram(this.program);
+      this.program = null;
+    }
+  }
+
   /** Releases WebGL resources and detaches only a renderer-owned canvas. */
   destroy() {
     if (!this.gl) return;
-    deleteStaticMeshBuffers(this.gl, this.meshBuffers);
-    deleteDynamicBuffers(this.gl, this.dynamicBuffers);
-    this.textureRegistry?.destroy?.();
-    if (this.program) {
-      this.gl.deleteProgram(this.program);
-    }
-    this.meshBuffers = null;
-    this.textureRegistry = null;
-    this.dynamicBuffers = null;
+    this.releaseGpuResources();
     cleanupCanvasTarget(this);
     this.canvas = null;
     this.ownerContainer = null;
     this.gl = null;
-    this.program = null;
   }
 }

@@ -168,7 +168,7 @@ test('texture registry rejects bad keys and conflicting shared upload images', (
   assert.throws(() => createTextureRegistry(gl, null, {}), /must return an array/);
   assert.throws(() => createTextureRegistry(gl, ['a', 'a'], {}), /Duplicate texture key/);
   const records = { a: { image: {}, uploadKey: 'same', uvRect: {u0:0,v0:0,u1:1,v1:1}, width:1,height:1 }, b: { image: {}, uploadKey: 'same', uvRect: {u0:0,v0:0,u1:1,v1:1}, width:1,height:1 } };
-  const uploadGl = { ...gl, TEXTURE_2D:1, RGBA:2, UNSIGNED_BYTE:3, UNPACK_FLIP_Y_WEBGL:4, TEXTURE_WRAP_S:5, TEXTURE_WRAP_T:6, CLAMP_TO_EDGE:7, TEXTURE_MAG_FILTER:8, TEXTURE_MIN_FILTER:9, NEAREST:10, LINEAR:11, createTexture: () => ({}), bindTexture(){}, pixelStorei(){}, texImage2D(){}, texParameteri(){} };
+  const uploadGl = { ...gl, TEXTURE_2D:1, RGBA:2, UNSIGNED_BYTE:3, UNPACK_FLIP_Y_WEBGL:4, TEXTURE_WRAP_S:5, TEXTURE_WRAP_T:6, CLAMP_TO_EDGE:7, TEXTURE_MAG_FILTER:8, TEXTURE_MIN_FILTER:9, NEAREST:10, LINEAR:11, MAX_TEXTURE_SIZE:12, getParameter: () => 4096, createTexture: () => ({}), bindTexture(){}, pixelStorei(){}, texImage2D(){}, texParameteri(){} };
   assert.throws(() => createTextureRegistry(uploadGl, ['a','b'], { getTexture: key => records[key] }), /different image/);
 });
 

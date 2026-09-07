@@ -1,19 +1,48 @@
 /**
  * Module: Uploads packed mesh arrays into GPU buffers and returns handles plus draw grouping metadata.
  */
+import { clearWebGLErrors, throwIfWebGLError } from '../webGLErrors.js';
+
+function uploadBuffer(gl, target, buffer, data, usage, label) {
+  clearWebGLErrors(gl);
+  try {
+    gl.bindBuffer(target, buffer);
+    gl.bufferData(target, data, usage);
+  } catch (error) {
+    throw new Error(
+      `[SectorRenderer] ${label} GPU upload failed: ${error?.message ?? error}`,
+      { cause: error }
+    );
+  }
+  throwIfWebGLError(gl, `${label} GPU upload`);
+}
+
 export function createGpuMeshBuffers(gl, mesh) {
-  const vertexBuffer = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
+  let vertexBuffer = null;
+  let indexBuffer = null;
 
-  const indexBuffer = gl.createBuffer();
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+  try {
+    vertexBuffer = gl.createBuffer();
+    if (!vertexBuffer) {
+      throw new Error('[SectorRenderer] Vertex buffer allocation failed.');
+    }
+    uploadBuffer(gl, gl.ARRAY_BUFFER, vertexBuffer, mesh.vertices, gl.STATIC_DRAW, 'Vertex-buffer');
 
-  return {
-    vertexBuffer,
-    indexBuffer,
-    indexCount: mesh.indices.length,
-    groups: mesh.groups ?? []
-  };
+    indexBuffer = gl.createBuffer();
+    if (!indexBuffer) {
+      throw new Error('[SectorRenderer] Index buffer allocation failed.');
+    }
+    uploadBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, indexBuffer, mesh.indices, gl.STATIC_DRAW, 'Index-buffer');
+
+    return {
+      vertexBuffer,
+      indexBuffer,
+      indexCount: mesh.indices.length,
+      groups: mesh.groups ?? []
+    };
+  } catch (error) {
+    if (indexBuffer) gl.deleteBuffer(indexBuffer);
+    if (vertexBuffer) gl.deleteBuffer(vertexBuffer);
+    throw error;
+  }
 }

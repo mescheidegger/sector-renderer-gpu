@@ -2,6 +2,7 @@
  * Module: Creates texture objects for preloaded assets, uploads image data, and exposes lookup/stats helpers.
  */
 import { assertRendererTextureRecord, assertTextureKeys } from '../../textureProvider.js';
+import { clearWebGLErrors, throwIfWebGLError } from '../webGLErrors.js';
 
 function isPowerOfTwo(value) {
   return value > 0 && (value & (value - 1)) === 0;
@@ -67,34 +68,63 @@ function applySamplingPolicy(gl, { useMipmaps, anisotropySupport }) {
   }
 }
 
+function runTextureUploadStage(gl, stage, operation) {
+  clearWebGLErrors(gl);
+  try {
+    operation();
+  } catch (error) {
+    throw new Error(
+      `[SectorRenderer] Texture GPU upload failed during ${stage}: ${error?.message ?? error}`,
+      { cause: error }
+    );
+  }
+  throwIfWebGLError(gl, `Texture GPU upload during ${stage}`);
+}
+
 function uploadImageTexture(gl, texture, image, anisotropySupport) {
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+  runTextureUploadStage(gl, 'image upload', () => {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+  });
 
   const canRepeat = isPowerOfTwo(image.width) && isPowerOfTwo(image.height);
   const useMipmaps = canRepeat;
 
-  if (useMipmaps) {
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-    gl.generateMipmap(gl.TEXTURE_2D);
-  } else {
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  }
+  runTextureUploadStage(gl, 'mipmap/sampling configuration', () => {
+    if (useMipmaps) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.generateMipmap(gl.TEXTURE_2D);
+    } else {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
 
-  applySamplingPolicy(gl, { useMipmaps, anisotropySupport });
+    applySamplingPolicy(gl, { useMipmaps, anisotropySupport });
+  });
 }
 
 function initializeFallbackTexture(gl, texture) {
-  const pixel = new Uint8Array([255, 255, 255, 255]);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  runTextureUploadStage(gl, 'initial allocation', () => {
+    const pixel = new Uint8Array([255, 255, 255, 255]);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  });
+}
+
+function getMaxTextureSize(gl) {
+  clearWebGLErrors(gl);
+  const maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  throwIfWebGLError(gl, 'MAX_TEXTURE_SIZE query');
+  if (!Number.isFinite(maximum) || maximum <= 0) {
+    throw new Error(`[SectorRenderer] Invalid MAX_TEXTURE_SIZE reported by WebGL: ${maximum}.`);
+  }
+  return maximum;
 }
 
 /** Uploads all preloaded textures and exposes key-based lookup/stat helpers. */
@@ -105,6 +135,7 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
   const imageByUploadKey = new Map();
   const createdTextures = new Set();
   const anisotropySupport = getAnisotropySupport(gl);
+  const maxTextureSize = textureKeys.length > 0 ? getMaxTextureSize(gl) : null;
 
   try {
     for (const key of textureKeys) {
@@ -117,6 +148,15 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
       assertRendererTextureRecord(source, key);
 
       const { image, uploadKey, uvRect, width, height, sourceSize } = source;
+      const sourceWidth = image.width ?? width;
+      const sourceHeight = image.height ?? height;
+
+      if (sourceWidth > maxTextureSize || sourceHeight > maxTextureSize) {
+        throw new Error(
+          `[SectorRenderer] Texture asset "${key}" (${sourceWidth}x${sourceHeight}) exceeds `
+          + `WebGL MAX_TEXTURE_SIZE (${maxTextureSize}).`
+        );
+      }
 
       const record = {
         key,
@@ -129,33 +169,38 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
         sourceSize: sourceSize ?? Object.freeze({ w: width, h: height })
       };
 
-      try {
-        const priorImage = imageByUploadKey.get(uploadKey);
-        if (priorImage && priorImage !== image) throw new Error(`uploadKey "${uploadKey}" is associated with a different image object`);
-        let texture = glTextureByUploadKey.get(uploadKey);
+      const priorImage = imageByUploadKey.get(uploadKey);
+      if (priorImage && priorImage !== image) {
+        throw new Error(`[SectorRenderer] Texture uploadKey "${uploadKey}" is associated with a different image object.`);
+      }
+      let texture = glTextureByUploadKey.get(uploadKey);
+      if (!texture) {
+        texture = gl.createTexture();
         if (!texture) {
-          texture = gl.createTexture();
-          createdTextures.add(texture);
+          throw new Error(`[SectorRenderer] Texture allocation failed for asset "${key}".`);
+        }
+        createdTextures.add(texture);
+        try {
           initializeFallbackTexture(gl, texture);
           uploadImageTexture(gl, texture, image, anisotropySupport);
-          glTextureByUploadKey.set(uploadKey, texture);
-          imageByUploadKey.set(uploadKey, image);
+        } catch (error) {
+          throw new Error(
+            `[SectorRenderer] Failed to create texture asset "${key}": ${error?.message ?? error}`,
+            { cause: error }
+          );
         }
-        record.texture = texture;
-
-        record.loaded = true;
-      } catch (error) {
-        record.failed = true;
-        throw new Error(
-          `Failed GPU upload for texture asset "${key}": ${error?.message ?? error}`
-        );
+        glTextureByUploadKey.set(uploadKey, texture);
+        imageByUploadKey.set(uploadKey, image);
       }
+      record.texture = texture;
+      record.loaded = true;
 
       records.set(record.key, record);
     }
   } catch (error) {
     for (const texture of createdTextures) gl.deleteTexture(texture);
     glTextureByUploadKey.clear();
+    imageByUploadKey.clear();
     records.clear();
     throw error;
   }
@@ -183,11 +228,12 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
     },
     getStats,
     destroy() {
-      for (const texture of glTextureByUploadKey.values()) {
+      for (const texture of createdTextures) {
         gl.deleteTexture(texture);
       }
       createdTextures.clear();
       glTextureByUploadKey.clear();
+      imageByUploadKey.clear();
       records.clear();
     }
   };
