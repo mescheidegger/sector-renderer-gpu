@@ -22,16 +22,18 @@ export function writeQuadVertices(target, {
   corners,
   opacity = 1,
   lightLevel = 1,
+  color = [1, 1, 1, 1],
   uvs
 }) {
   const [topLeft, topRight, bottomRight, bottomLeft] = corners;
   const [uvTopLeft, uvTopRight, uvBottomRight, uvBottomLeft] = uvs;
+  const [r, g, b, a] = color;
 
   target.push(
-    topLeft[0], topLeft[1], topLeft[2], uvTopLeft[0], uvTopLeft[1], 1, 1, 1, opacity, lightLevel,
-    topRight[0], topRight[1], topRight[2], uvTopRight[0], uvTopRight[1], 1, 1, 1, opacity, lightLevel,
-    bottomRight[0], bottomRight[1], bottomRight[2], uvBottomRight[0], uvBottomRight[1], 1, 1, 1, opacity, lightLevel,
-    bottomLeft[0], bottomLeft[1], bottomLeft[2], uvBottomLeft[0], uvBottomLeft[1], 1, 1, 1, opacity, lightLevel
+    topLeft[0], topLeft[1], topLeft[2], uvTopLeft[0], uvTopLeft[1], r, g, b, a * opacity, lightLevel,
+    topRight[0], topRight[1], topRight[2], uvTopRight[0], uvTopRight[1], r, g, b, a * opacity, lightLevel,
+    bottomRight[0], bottomRight[1], bottomRight[2], uvBottomRight[0], uvBottomRight[1], r, g, b, a * opacity, lightLevel,
+    bottomLeft[0], bottomLeft[1], bottomLeft[2], uvBottomLeft[0], uvBottomLeft[1], r, g, b, a * opacity, lightLevel
   );
 }
 
@@ -399,13 +401,14 @@ export class WebGLRendererHost {
   drawQuad({ textureKey, quad, viewProjection, flipV = false, flipX = false }) {
     const gl = this.gl;
     const textureRecord = this.textureRegistry.get(textureKey);
-    if (!textureRecord || textureRecord.failed) {
+    const useTexture = textureRecord && !textureRecord.failed ? 1 : 0;
+    if (!useTexture && !quad.color) {
       return false;
     }
 
     const vertices = [];
     const resolvedUvs = resolveQuadUvs({
-      uvRect: textureRecord.uvRect,
+      uvRect: textureRecord?.uvRect,
       uvs: quad.uvs,
       flipX,
       flipV
@@ -422,11 +425,18 @@ export class WebGLRendererHost {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.dynamicBuffers.indices, gl.DYNAMIC_DRAW);
 
     gl.uniformMatrix4fv(this.uniformLocations.viewProjection, false, viewProjection);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, textureRecord.texture);
-    gl.uniform1f(this.uniformLocations.useTexture, 1);
-    gl.uniform1f(this.uniformLocations.skyProjection, 0);
+    if (useTexture) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, textureRecord.texture);
+    }
+    gl.uniform1f(this.uniformLocations.useTexture, useTexture);
+    gl.uniform1f(this.uniformLocations.skyProjection, quad.projection === 'sky' ? 1 : 0);
+    if (quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling') {
+      gl.enable?.(gl.CULL_FACE);
+      gl.cullFace?.(gl.BACK);
+    }
     gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    if (quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling') gl.disable?.(gl.CULL_FACE);
 
     return true;
   }
@@ -537,16 +547,21 @@ export class WebGLRendererHost {
     return draws;
   }
 
-  drawWorldQuads({ quads, viewProjection }) {
+  drawWorldQuads({ quads, viewProjection, timeSeconds = 0 }) {
     let draws = 0;
 
     for (const quad of quads) {
       if (this.drawQuad({
-        textureKey: quad.textureKey,
+        textureKey: quad.surfaceType
+          ? resolveAnimatedMaterialKey(quad.textureKey, timeSeconds, this.materialAnimations)
+          : quad.textureKey,
         quad: {
           corners: quad.corners,
           opacity: quad.opacity ?? 1,
           lightLevel: normalizeLightLevel(quad.lightLevel),
+          color: quad.color,
+          surfaceType: quad.surfaceType,
+          projection: quad.projection,
           uvs: quad.uvs ?? null
         },
         viewProjection,
@@ -609,6 +624,7 @@ export class WebGLRendererHost {
     const staticStats = this.drawStaticWorld(viewProjection, camera, timeSeconds);
     const worldQuadDraws = this.drawWorldQuads({
       quads: worldQuads,
+      timeSeconds,
       viewProjection
     });
     const worldSpriteDraws = this.drawWorldSprites({

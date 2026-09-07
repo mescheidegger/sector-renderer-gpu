@@ -3,6 +3,7 @@
  */
 export const GEOMETRY_EPSILON = 1e-6;
 export const SHARED_SOLID_SURFACE_OFFSET = 5e-3;
+export const MAX_WALL_STITCH_DISTANCE = Math.max(SHARED_SOLID_SURFACE_OFFSET * 4, GEOMETRY_EPSILON * 16);
 
 /** Compares two floating-point values using an epsilon tolerance. */
 export function nearlyEqual(a, b, epsilon = GEOMETRY_EPSILON) {

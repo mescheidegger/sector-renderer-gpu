@@ -16,7 +16,7 @@ const sector = (id = 1) => ({
 const world = (extra = {}) => ({ sectors: [sector()], ...extra });
 
 test('public barrel exposes only the deliberate consumer API', () => {
-  assert.deepEqual(Object.keys(api).sort(), ['DEFAULT_PROJECTION','SectorRenderer','assertRendererFrame','assertRendererTextureRecord','assertRendererWorld','assertTextureProvider'].sort());
+  assert.deepEqual(Object.keys(api).sort(), ['DEFAULT_PROJECTION','SectorRenderer','assertRendererFrame','assertRendererTextureRecord','assertRendererWorld','assertTextureProvider','createDynamicSectorWorldQuads'].sort());
   assert.equal('createApp' in api, false);
 });
 

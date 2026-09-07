@@ -36,7 +36,7 @@
  * @property {string|null} [trimMaterial] Material key for side trim, resolved directly through the TextureProvider or through a configured material animation.
  * @typedef {Object} SectorRenderWorld
  * @property {RendererSector[]} sectors
- * @property {RendererId[]} [dynamicSectorIds=[]]
+ * @property {RendererId[]} [dynamicSectorIds=[]] Sectors with caller-controlled floor heights; their floors and dependent surfaces are replaced through createDynamicSectorWorldQuads.
  * @property {PortalOpening[]} [portalOpenings=[]]
  * @typedef {{x:number,y:number,z:number,yaw:number}} RendererCamera
  * @typedef {Object} RendererHorizontalPoint
@@ -64,8 +64,11 @@
  * @property {RendererVerticalSurfaceConstraint[]} [surfaceConstraints] Optional planes that keep this upright billboard in front of one or more vertical world surfaces.
  * @property {RendererSurfaceAttachment} [surfaceAttachment] Optional positioning behavior for a surface-attached sprite.
  * @typedef {Object} RendererWorldQuad
- * @property {[number[],number[],number[],number[]]} corners Four world-space corners in top-left, top-right, bottom-right, bottom-left order.
- * @property {string} textureKey TextureProvider key.
+ * @property {[number[],number[],number[],number[]]} corners Four cyclic world-space corners; triangles repeat the third corner as the fourth.
+ * @property {string|null} textureKey TextureProvider key, or a material key when surfaceType is supplied.
+ * @property {number[]} [color] RGBA fallback color in 0..1; enables flat-color drawing when the texture is missing. Defaults to white for textured quads.
+ * @property {'wall'|'floor'|'ceiling'} [surfaceType] Renderer surface semantics: animated material lookup and back-face culling for floors/ceilings. Produced by createDynamicSectorWorldQuads.
+ * @property {'world'|'sky'} [projection='world'] Texture coordinate projection.
  * @property {number} [opacity=1] Opacity scalar.
  * @property {number} [lightLevel=1] Values in 0..1 are direct brightness scalars; values above 1 use a 0..255 scale. The result is clamped to 0..1, and non-finite values default to 1.
  * @property {[number[],number[],number[],number[]]} [uvs] Four normalized uploaded-image texture coordinates.

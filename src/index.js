@@ -4,6 +4,7 @@
  * Deliberate public package surface.
  */
 export { SectorRenderer } from './SectorRenderer.js';
+export { createDynamicSectorWorldQuads } from './createDynamicSectorWorldQuads.js';
 export { assertRendererWorld, assertRendererFrame } from './contracts.js';
 export { assertTextureProvider, assertRendererTextureRecord } from './textureProvider.js';
 export { DEFAULT_PROJECTION } from './webgl/resolveProjection.js';

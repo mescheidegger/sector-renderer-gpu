@@ -7,9 +7,10 @@ import { resolveWallPrimitivesFromSeams } from './scene/resolveWallPrimitivesFro
 import { dedupeCoplanarWallPrimitives } from './scene/dedupeCoplanarWallPrimitives.js';
 import {
   GEOMETRY_EPSILON,
-  SHARED_SOLID_SURFACE_OFFSET
+  MAX_WALL_STITCH_DISTANCE
 } from './scene/geometry/seamGeometry.js';
 import { assertRendererWorld } from './contracts.js';
+import { partitionWallSeams } from './scene/partitionWallSeams.js';
 
 function makeWallRefKey(sectorId, wallIndex) {
   return `${String(sectorId)}:${wallIndex}`;
@@ -205,11 +206,9 @@ function isIntersectionCloseEnough(a, b, point, touch) {
     ? { x: b.x0, y: b.y0 }
     : { x: b.x1, y: b.y1 };
 
-  const maxStitchDistance = Math.max(SHARED_SOLID_SURFACE_OFFSET * 4, GEOMETRY_EPSILON * 16);
-
   return (
-    distance2D(point, aCurrent) <= maxStitchDistance &&
-    distance2D(point, bCurrent) <= maxStitchDistance
+    distance2D(point, aCurrent) <= MAX_WALL_STITCH_DISTANCE &&
+    distance2D(point, bCurrent) <= MAX_WALL_STITCH_DISTANCE
   );
 }
 
@@ -265,27 +264,47 @@ function stitchOffsetWallCorners(walls) {
   return walls;
 }
 
-function wallPrimitiveTouchesDynamicSector(wall, dynamicSectorIds, sectorById) {
-  if (dynamicSectorIds.has(wall.ownerSectorId)) {
-    return true;
-  }
-  if (wall.seamParticipants?.some(({ sectorId }) => dynamicSectorIds.has(sectorId))) {
-    return true;
-  }
-
-  const ownerSector = sectorById.get(wall.ownerSectorId);
-  const ownerWall = ownerSector?.walls?.[wall.ownerWallIndex];
-  return (
-    (ownerWall?.portalTo != null && dynamicSectorIds.has(ownerWall.portalTo)) ||
-    ownerWall?.portalLinks?.some(({ sectorId }) => dynamicSectorIds.has(sectorId))
-  );
+/** Prepares immutable topology shared by static construction and dynamic presentation. */
+export function prepareSceneGeometry(world) {
+  assertRendererWorld(world);
+  const sectorById = new Map(world.sectors.map((sector) => [sector.id, sector]));
+  const dynamicSectorIds = new Set(world.dynamicSectorIds ?? []);
+  const dynamicFloorSectorIds = new Set(world.sectors
+    .filter((sector) => dynamicSectorIds.has(sector.id) || dynamicSectorIds.has(sector.parentSectorId))
+    .map((sector) => sector.id));
+  const seamIndexResult = indexWallSeams(world);
+  return {
+    world,
+    sectorById,
+    dynamicSectorIds,
+    dynamicFloorSectorIds,
+    seamIndexResult,
+    dynamicSeamKeys: partitionWallSeams(seamIndexResult.seamWallsByKey, dynamicSectorIds),
+    portalOpeningByWallRef: buildPortalOpeningByWallRef(world.portalOpenings)
+  };
 }
 
-/** Builds the complete GPU scene bundle (walls/floors/ceilings + stats) from the normalized sector render world. */
+/** Builds the static GPU scene bundle from the normalized sector render world. */
 export function buildGpuScene(world, options = {}) {
-  assertRendererWorld(world);
   const start = performance.now();
-  const sectorById = new Map(world.sectors.map((sector) => [sector.id, sector]));
+  const scene = buildSceneGeometry(prepareSceneGeometry(world), options);
+  scene.buildMs = performance.now() - start;
+  return scene;
+}
+
+/** Both batches pass through the same surface, seam, dedupe and stitching rules. */
+export function buildSceneGeometry(prepared, options = {}) {
+  const start = performance.now();
+  const { world, dynamicFloorSectorIds, dynamicSeamKeys, portalOpeningByWallRef } = prepared;
+  const dynamic = options.dynamic ?? false;
+  const sectorById = new Map(prepared.sectorById);
+  for (const [id, floor] of options.floorZBySectorId ?? []) {
+    const sector = sectorById.get(id);
+    if (!prepared.dynamicSectorIds.has(id) || !sector || !Number.isFinite(floor) || floor >= sector.ceil) {
+      throw new TypeError(`[SectorRenderer] Invalid dynamic floor height for sector "${id}".`);
+    }
+    sectorById.set(id, { ...sector, floor });
+  }
   const stats = {
     authoredWalls: 0,
     indexedWallSeams: 0,
@@ -302,16 +321,15 @@ export function buildGpuScene(world, options = {}) {
     ceilingTriangles: 0
   };
 
-  const dynamicSectorIds = new Set(world.dynamicSectorIds ?? []);
-  const surfaceResult = buildSurfacePrimitives(world, {
-    excludeFloorSectorIds: dynamicSectorIds
+  const surfaceResult = buildSurfacePrimitives({ sectors: [...sectorById.values()] }, {
+    includeFloor: (sector) => dynamicFloorSectorIds.has(sector.id) === dynamic,
+    includeCeilings: !dynamic
   });
   const { floors, ceilings } = surfaceResult;
   Object.assign(stats, surfaceResult.stats);
 
-  const seamIndexResult = indexWallSeams(world);
-  const { seamWallsByKey } = seamIndexResult;
-  Object.assign(stats, seamIndexResult.stats);
+  const { seamWallsByKey } = prepared.seamIndexResult;
+  Object.assign(stats, prepared.seamIndexResult.stats);
 
   const seamDebugConfig = options.seamDebug ?? {};
   const seamDebugEnabled = Boolean(seamDebugConfig.enabled);
@@ -332,10 +350,11 @@ export function buildGpuScene(world, options = {}) {
     dedupeEvents: []
   };
 
-  const portalOpeningByWallRef = buildPortalOpeningByWallRef(world.portalOpenings);
-
+  const selectedSeams = new Map([...seamWallsByKey]
+    .filter(([key]) => !dynamic || dynamicSeamKeys.has(key))
+    .map(([key, entries]) => [key, entries.map((entry) => ({ ...entry, sector: sectorById.get(entry.sector.id) }))]));
   const walls = resolveWallPrimitivesFromSeams({
-    seamWallsByKey,
+    seamWallsByKey: selectedSeams,
     sectorById,
     portalOpeningByWallRef,
     stats,
@@ -346,19 +365,8 @@ export function buildGpuScene(world, options = {}) {
     ? getSeamPrimitives(walls, seamDebugState.targetSeamKey)
     : [];
 
-  const staticCandidateWalls = walls.filter((wall) => {
-    if (!dynamicSectorIds.size) {
-      return true;
-    }
-
-    if (wallPrimitiveTouchesDynamicSector(wall, dynamicSectorIds, sectorById)) {
-      return false;
-    }
-
-    return true;
-  });
-
-  const dedupedWallResult = dedupeCoplanarWallPrimitives(staticCandidateWalls);
+  const candidateWalls = walls.filter((wall) => dynamicSeamKeys.has(wall.seamKey) === dynamic);
+  const dedupedWallResult = dedupeCoplanarWallPrimitives(candidateWalls);
   const stitchedWalls = stitchOffsetWallCorners(dedupedWallResult.walls);
 
   stats.coplanarDedupChecks = dedupedWallResult.stats.coplanarChecks;

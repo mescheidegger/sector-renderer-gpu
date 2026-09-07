@@ -10,7 +10,7 @@ import {
 } from './geometry/seamGeometry.js';
 
 const PORTAL_TRIM_SIDE_WIDTH = 0.2;
-const PORTAL_TRIM_SURFACE_OFFSET = 6e-3;
+export const PORTAL_TRIM_SURFACE_OFFSET = 6e-3;
 
 function classifyGpuPortalWall(frontSector, backSector) {
   const openTop = Math.min(frontSector.ceil, backSector.ceil);
@@ -292,8 +292,8 @@ function resolveWallSpansForSeam({
       const links = owner.wall.portalLinks
         .map((link) => ({
           ...link,
-          bottomZ: Math.max(ownerSector.floor, link.bottomZ),
-          topZ: Math.min(ownerSector.ceil, link.topZ)
+          bottomZ: Math.max(ownerSector.floor, sectorById.get(link.sectorId)?.floor ?? ownerSector.floor, link.bottomZ),
+          topZ: Math.min(ownerSector.ceil, sectorById.get(link.sectorId)?.ceil ?? ownerSector.ceil, link.topZ)
         }))
         .filter((link) => link.topZ > link.bottomZ + GEOMETRY_EPSILON)
         .sort((a, b) => a.bottomZ - b.bottomZ);
