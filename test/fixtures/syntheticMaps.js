@@ -86,6 +86,49 @@ export function connectedSectorMap({
   return { sectors: [left, right] };
 }
 
+/**
+ * Two rooms sharing one continuous portal. The right room can author extra
+ * collinear boundary vertices without changing the physical opening.
+ */
+export function subdividedPortalMap({ subdivisions = 1 } = {}) {
+  const left = rectangularSector({
+    id: 'left',
+    x0: 0,
+    x1: 4,
+    y1: 8,
+    portals: { 1: 'right' }
+  });
+  const splitYs = Array.from(
+    { length: Math.max(0, subdivisions) },
+    (_, index) => 8 - ((8 * (index + 1)) / (subdivisions + 1))
+  );
+  const vertices = [
+    { x: 4, y: 0 },
+    { x: 8, y: 0 },
+    { x: 8, y: 8 },
+    { x: 4, y: 8 },
+    ...splitYs.map((y) => ({ x: 4, y }))
+  ];
+  const right = {
+    ...rectangularSector({ id: 'right', x0: 4, x1: 8, y1: 8 }),
+    vertices,
+    walls: makeWalls(vertices.length, 'wall-a')
+  };
+  for (let wallIndex = 3; wallIndex < right.walls.length; wallIndex += 1) {
+    right.walls[wallIndex].portalTo = 'left';
+  }
+
+  return {
+    sectors: [left, right],
+    portalOpenings: [{
+      wallRef: { sectorId: 'left', wallIndex: 1 },
+      bottomZ: 1,
+      topZ: 5,
+      trimMaterial: 'TEST_PORTAL_TRIM'
+    }]
+  };
+}
+
 function makePolygonSector({
   id,
   points,

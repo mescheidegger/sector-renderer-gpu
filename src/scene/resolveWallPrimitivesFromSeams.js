@@ -55,6 +55,9 @@ function emitPortalTrimPrimitivesForSeam({
   trimMaterial,
   openingBottomZ,
   openingTopZ,
+  emitStart = true,
+  emitEnd = true,
+  continuousSpanLength = null,
   seamDebugResolution
 }) {
   if (!trimMaterial || !(openingTopZ > openingBottomZ + GEOMETRY_EPSILON)) {
@@ -62,10 +65,11 @@ function emitPortalTrimPrimitivesForSeam({
   }
 
   const shiftedSegment = offsetWallTowardsSectorInterior(entry, PORTAL_TRIM_SURFACE_OFFSET);
+  const sourceSegment = getEntryIntervalSegment(entry);
   const trimOffsetXY = {
-    x: shiftedSegment.a.x - entry.a.x,
-    y: shiftedSegment.a.y - entry.a.y,
-    magnitude: Math.hypot(shiftedSegment.a.x - entry.a.x, shiftedSegment.a.y - entry.a.y)
+    x: shiftedSegment.a.x - sourceSegment.a.x,
+    y: shiftedSegment.a.y - sourceSegment.a.y,
+    magnitude: Math.hypot(shiftedSegment.a.x - sourceSegment.a.x, shiftedSegment.a.y - sourceSegment.a.y)
   };
   const segmentDX = shiftedSegment.b.x - shiftedSegment.a.x;
   const segmentDY = shiftedSegment.b.y - shiftedSegment.a.y;
@@ -74,7 +78,8 @@ function emitPortalTrimPrimitivesForSeam({
     return;
   }
 
-  const maxUsableWidth = (segmentLength * 0.5) - GEOMETRY_EPSILON;
+  const openingLength = continuousSpanLength ?? segmentLength;
+  const maxUsableWidth = (openingLength * 0.5) - GEOMETRY_EPSILON;
   const stripWidth = Math.min(PORTAL_TRIM_SIDE_WIDTH, maxUsableWidth);
   if (!(stripWidth > GEOMETRY_EPSILON)) {
     return;
@@ -132,8 +137,12 @@ function emitPortalTrimPrimitivesForSeam({
     return primitive;
   };
 
-  const startPrimitive = createTrimPrimitive(startSegment, 'portal-trim-start');
-  const endPrimitive = createTrimPrimitive(endSegment, 'portal-trim-end');
+  const startPrimitive = emitStart
+    ? createTrimPrimitive(startSegment, 'portal-trim-start')
+    : null;
+  const endPrimitive = emitEnd
+    ? createTrimPrimitive(endSegment, 'portal-trim-end')
+    : null;
 
   if (seamDebugResolution) {
     seamDebugResolution.portalTrimSurfaceOffset = {
@@ -154,6 +163,168 @@ function resolvePortalMetadataForEntries(seamEntries, portalOpeningByWallRef) {
     }
   }
   return { wallRefKey: null, trimMaterial: null, openingBounds: null };
+}
+
+function sortSeamEntries(seamEntries) {
+  return [...seamEntries].sort((left, right) => {
+    if (left.sector.id !== right.sector.id) {
+      return String(left.sector.id).localeCompare(String(right.sector.id));
+    }
+    return left.index - right.index;
+  });
+}
+
+function sameSectorPair(left, right) {
+  return (
+    (Object.is(left.sectorA, right.sectorA) && Object.is(left.sectorB, right.sectorB)) ||
+    (Object.is(left.sectorA, right.sectorB) && Object.is(left.sectorB, right.sectorA))
+  );
+}
+
+function sameOpeningBounds(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return (
+    Math.abs(left.bottomZ - right.bottomZ) <= GEOMETRY_EPSILON &&
+    Math.abs(left.topZ - right.topZ) <= GEOMETRY_EPSILON
+  );
+}
+
+function portalTrimSemanticsMatch(left, right) {
+  return (
+    left.lineKey === right.lineKey &&
+    left.paired === right.paired &&
+    sameSectorPair(left, right) &&
+    left.trimMaterial === right.trimMaterial &&
+    sameOpeningBounds(left.openingBounds, right.openingBounds) &&
+    Math.abs(left.openingBottomZ - right.openingBottomZ) <= GEOMETRY_EPSILON &&
+    Math.abs(left.openingTopZ - right.openingTopZ) <= GEOMETRY_EPSILON
+  );
+}
+
+function describePortalTrimSeam(seamEntries, sectorById, portalOpeningByWallRef) {
+  const sortedEntries = sortSeamEntries(seamEntries);
+  const owner = sortedEntries[0];
+  const opposite = sortedEntries[1] ?? null;
+  const portalMetadata = resolvePortalMetadataForEntries(sortedEntries, portalOpeningByWallRef);
+  if (!owner || !portalMetadata.trimMaterial) return null;
+
+  let otherSector = null;
+  if (opposite) {
+    const isPortal = (
+      owner.wall.portalTo === opposite.sector.id ||
+      opposite.wall.portalTo === owner.sector.id
+    );
+    if (!isPortal) return null;
+    otherSector = opposite.sector;
+  } else if (owner.wall.portalTo != null) {
+    otherSector = sectorById.get(owner.wall.portalTo) ?? null;
+  }
+  if (!otherSector) return null;
+
+  const portal = classifyGpuPortalWallWithOpeningBounds(
+    owner.sector,
+    otherSector,
+    portalMetadata.openingBounds
+  );
+  if (!portal.isOpen) return null;
+
+  return {
+    seamKey: owner.seamKey,
+    lineKey: owner.lineKey,
+    intervalT0: owner.intervalT0,
+    intervalT1: owner.intervalT1,
+    sectorA: owner.sector.id,
+    sectorB: otherSector.id,
+    paired: Boolean(opposite),
+    trimMaterial: portalMetadata.trimMaterial,
+    openingBounds: portalMetadata.openingBounds,
+    openingBottomZ: portal.openBottom,
+    openingTopZ: portal.openTop,
+    exposeT0: true,
+    exposeT1: true
+  };
+}
+
+/** Determine exposed physical opening ends before any trim primitives are emitted. */
+function preparePortalTrimEndpointExposure(seamWallsByKey, sectorById, portalOpeningByWallRef) {
+  const descriptors = [...seamWallsByKey.values()]
+    .map((entries) => describePortalTrimSeam(entries, sectorById, portalOpeningByWallRef))
+    .filter(Boolean);
+  const parent = descriptors.map((_, index) => index);
+  const descriptorIndicesByLine = new Map();
+  descriptors.forEach((descriptor, index) => {
+    const indices = descriptorIndicesByLine.get(descriptor.lineKey) ?? [];
+    indices.push(index);
+    descriptorIndicesByLine.set(descriptor.lineKey, indices);
+  });
+  const find = (index) => {
+    while (parent[index] !== index) {
+      parent[index] = parent[parent[index]];
+      index = parent[index];
+    }
+    return index;
+  };
+  const union = (left, right) => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
+  };
+
+  for (const descriptorIndices of descriptorIndicesByLine.values()) {
+    for (let leftOffset = 0; leftOffset < descriptorIndices.length; leftOffset += 1) {
+      const leftIndex = descriptorIndices[leftOffset];
+      const left = descriptors[leftIndex];
+      for (let rightOffset = leftOffset + 1; rightOffset < descriptorIndices.length; rightOffset += 1) {
+        const rightIndex = descriptorIndices[rightOffset];
+        const right = descriptors[rightIndex];
+        if (!portalTrimSemanticsMatch(left, right)) continue;
+
+        if (Math.abs(left.intervalT1 - right.intervalT0) <= GEOMETRY_EPSILON) {
+          left.exposeT1 = false;
+          right.exposeT0 = false;
+          union(leftIndex, rightIndex);
+        } else if (Math.abs(right.intervalT1 - left.intervalT0) <= GEOMETRY_EPSILON) {
+          right.exposeT1 = false;
+          left.exposeT0 = false;
+          union(leftIndex, rightIndex);
+        }
+      }
+    }
+  }
+
+  const spansByRoot = new Map();
+  descriptors.forEach((descriptor, index) => {
+    const root = find(index);
+    const span = spansByRoot.get(root) ?? {
+      t0: descriptor.intervalT0,
+      t1: descriptor.intervalT1
+    };
+    span.t0 = Math.min(span.t0, descriptor.intervalT0);
+    span.t1 = Math.max(span.t1, descriptor.intervalT1);
+    spansByRoot.set(root, span);
+  });
+
+  return new Map(descriptors.map((descriptor, index) => {
+    const span = spansByRoot.get(find(index));
+    return [descriptor.seamKey, {
+      exposeT0: descriptor.exposeT0,
+      exposeT1: descriptor.exposeT1,
+      continuousSpanLength: span.t1 - span.t0
+    }];
+  }));
+}
+
+function getEntryTrimEndpointExposure(entry, seamExposure) {
+  if (!seamExposure) {
+    return { emitStart: true, emitEnd: true, continuousSpanLength: null };
+  }
+  const followsCanonicalLine = entry.tEnd >= entry.tStart;
+  return {
+    emitStart: followsCanonicalLine ? seamExposure.exposeT0 : seamExposure.exposeT1,
+    emitEnd: followsCanonicalLine ? seamExposure.exposeT1 : seamExposure.exposeT0,
+    continuousSpanLength: seamExposure.continuousSpanLength
+  };
 }
 
 function getEntryIntervalSegment(entry) {
@@ -195,6 +366,7 @@ function resolveWallSpansForSeam({
   portalOpeningByWallRef,
   seamKey,
   seamEntries,
+  portalTrimEndpointExposure,
   stats,
   seamDebugState
 }) {
@@ -202,12 +374,7 @@ function resolveWallSpansForSeam({
     return;
   }
 
-  const sortedEntries = [...seamEntries].sort((left, right) => {
-    if (left.sector.id !== right.sector.id) {
-      return String(left.sector.id).localeCompare(String(right.sector.id));
-    }
-    return left.index - right.index;
-  });
+  const sortedEntries = sortSeamEntries(seamEntries);
 
   const owner = sortedEntries[0];
   const opposite = sortedEntries.find((entry) => entry !== owner) ?? null;
@@ -447,6 +614,7 @@ function resolveWallSpansForSeam({
       trimMaterial,
       openingBottomZ: portal.openBottom,
       openingTopZ: portal.openTop,
+      ...getEntryTrimEndpointExposure(owner, portalTrimEndpointExposure),
       seamDebugResolution
     });
 
@@ -741,6 +909,7 @@ function resolveWallSpansForSeam({
       trimMaterial,
       openingBottomZ: portalLeft.openBottom,
       openingTopZ: portalLeft.openTop,
+      ...getEntryTrimEndpointExposure(left, portalTrimEndpointExposure),
       seamDebugResolution
     });
 
@@ -753,6 +922,7 @@ function resolveWallSpansForSeam({
       trimMaterial,
       openingBottomZ: portalRight.openBottom,
       openingTopZ: portalRight.openTop,
+      ...getEntryTrimEndpointExposure(right, portalTrimEndpointExposure),
       seamDebugResolution
     });
   }
@@ -775,14 +945,21 @@ export function resolveWallPrimitivesFromSeams({
   seamDebugState
 }) {
   const walls = [];
+  const portalTrimEndpointExposureBySeamKey = preparePortalTrimEndpointExposure(
+    seamWallsByKey,
+    sectorById,
+    portalOpeningByWallRef
+  );
 
   for (const seamEntries of seamWallsByKey.values()) {
+    const seamKey = seamEntries[0]?.seamKey ?? null;
     resolveWallSpansForSeam({
       walls,
       sectorById,
-      seamKey: seamEntries[0]?.seamKey ?? null,
+      seamKey,
       seamEntries,
       portalOpeningByWallRef,
+      portalTrimEndpointExposure: portalTrimEndpointExposureBySeamKey.get(seamKey) ?? null,
       stats,
       seamDebugState
     });

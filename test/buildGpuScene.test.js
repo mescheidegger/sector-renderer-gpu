@@ -7,7 +7,8 @@ import {
   concaveSharedSolidMap,
   connectedSectorMap,
   rectangularSector,
-  singleSectorMap
+  singleSectorMap,
+  subdividedPortalMap
 } from './fixtures/syntheticMaps.js';
 
 test('compiles one rectangular sector with walls, surfaces, materials, and light', () => {
@@ -336,6 +337,99 @@ test('generic portal trim preserves material, opening bounds, and finite geometr
   assert.equal(trim.length, 4);
   assert.ok(trim.every((wall) => wall.material?.key === 'TEST_PORTAL_TRIM'));
   assert.ok(trim.every((wall) => wall.bottomZ === 1 && wall.topZ === 5));
+  assertValidSceneWalls(trim);
+});
+
+function normalizedPortalTrim(scene) {
+  return scene.walls
+    .filter((wall) => wall.id.includes('portal-trim'))
+    .map((wall) => ({
+      x0: wall.x0,
+      y0: wall.y0,
+      x1: wall.x1,
+      y1: wall.y1,
+      bottomZ: wall.bottomZ,
+      topZ: wall.topZ,
+      material: wall.material?.key
+    }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+test('portal trim follows physical endpoints across one or many seam subdivisions', () => {
+  const unsplit = buildGpuScene(subdividedPortalMap({ subdivisions: 0 }));
+  const expectedTrim = normalizedPortalTrim(unsplit);
+
+  assert.equal(expectedTrim.length, 4, 'the two portal-facing sides each retain both physical ends');
+  for (const subdivisions of [1, 2]) {
+    const scene = buildGpuScene(subdividedPortalMap({ subdivisions }));
+    const trim = normalizedPortalTrim(scene);
+
+    assert.deepEqual(trim, expectedTrim, 'authored collinear subdivision must not change trim coverage');
+    assert.equal(trim.some(({ y0, y1 }) => Math.min(y0, y1) > 0.2 && Math.max(y0, y1) < 7.8), false);
+    assert.ok(trim.every(({ material, bottomZ, topZ }) =>
+      material === 'TEST_PORTAL_TRIM' && bottomZ === 1 && topZ === 5
+    ));
+    assertValidSceneWalls(scene.walls.filter((wall) => wall.id.includes('portal-trim')));
+  }
+
+  const debugScene = buildGpuScene(subdividedPortalMap({ subdivisions: 1 }), {
+    seamDebug: { enabled: true, targetWallRef: { sectorId: 'left', wallIndex: 1 } }
+  });
+  const trimDebug = debugScene.seamDebug.seamResolution.portalTrimSurfaceOffset;
+  assert.equal(trimDebug.primitiveIds.filter(Boolean).length, 1, 'the internal interval end reports no emitted trim');
+  assert.ok(Math.abs(trimDebug.appliedOffsetXY.magnitude - 0.006) < 1e-9);
+});
+
+test('portal trim preserves genuine subspan endpoints inside a longer authored wall', () => {
+  const left = rectangularSector({ id: 'left', x0: 0, x1: 4, y1: 8 });
+  const right = rectangularSector({
+    id: 'right',
+    x0: 4,
+    x1: 8,
+    y0: 2,
+    y1: 6,
+    portals: { 3: 'left' }
+  });
+  const scene = buildGpuScene({
+    sectors: [left, right],
+    portalOpenings: [{
+      wallRef: { sectorId: 'right', wallIndex: 3 },
+      bottomZ: 1,
+      topZ: 5,
+      trimMaterial: 'PARTIAL_TRIM'
+    }]
+  });
+  const trim = scene.walls.filter((wall) => wall.id.includes('portal-trim'));
+
+  assert.equal(trim.length, 4);
+  assert.deepEqual(
+    new Set(trim.flatMap(({ y0, y1 }) => [y0, y1])),
+    new Set([2, 2.2, 5.8, 6])
+  );
+  assert.ok(trim.every(({ material }) => material?.key === 'PARTIAL_TRIM'));
+  assertValidSceneWalls(trim);
+});
+
+test('adjacent portals with different opening semantics retain their shared boundary trim', () => {
+  const world = subdividedPortalMap({ subdivisions: 1 });
+  world.sectors[0].walls[1].portalTo = null;
+  world.portalOpenings = [
+    { wallRef: { sectorId: 'right', wallIndex: 3 }, bottomZ: 2, topZ: 5, trimMaterial: 'UPPER_TRIM' },
+    { wallRef: { sectorId: 'right', wallIndex: 4 }, bottomZ: 1, topZ: 4, trimMaterial: 'LOWER_TRIM' }
+  ];
+  const scene = buildGpuScene(world);
+  const trim = scene.walls.filter((wall) => wall.id.includes('portal-trim'));
+  const internalTrim = trim.filter(({ y0, y1 }) =>
+    Math.min(y0, y1) >= 3.8 && Math.max(y0, y1) <= 4.2
+  );
+
+  assert.ok(internalTrim.length >= 4, 'dedupe may vertically split trim but must retain both opening ends');
+  assert.deepEqual(new Set(internalTrim.map(({ material }) => material?.key)), new Set(['UPPER_TRIM', 'LOWER_TRIM']));
+  for (const material of ['UPPER_TRIM', 'LOWER_TRIM']) {
+    const materialTrim = internalTrim.filter((wall) => wall.material?.key === material);
+    assert.ok(materialTrim.some(({ x0 }) => x0 < 4));
+    assert.ok(materialTrim.some(({ x0 }) => x0 > 4));
+  }
   assertValidSceneWalls(trim);
 });
 
