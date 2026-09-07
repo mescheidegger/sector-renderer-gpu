@@ -70,6 +70,8 @@
  * @property {'wall'|'floor'|'ceiling'} [surfaceType] Renderer surface semantics: animated material lookup and back-face culling for floors/ceilings. Produced by createDynamicSectorWorldQuads.
  * @property {'world'|'sky'} [projection='world'] Texture coordinate projection.
  * @property {number} [opacity=1] Opacity scalar.
+ * @property {'opaque'|'mask'|'blend'} [alphaMode] Compositing behavior. When omitted, opacity/color alpha below 1 selects blend; otherwise textured quads select mask and flat-color quads select opaque.
+ * @property {number} [alphaCutoff=0.5] Mask threshold applied to combined texture/color opacity alpha; normalized to 0..1. Discarded fragments write neither color nor depth.
  * @property {number} [lightLevel=1] Values in 0..1 are direct brightness scalars; values above 1 use a 0..255 scale. The result is clamped to 0..1, and non-finite values default to 1.
  * @property {[number[],number[],number[],number[]]} [uvs] Four normalized uploaded-image texture coordinates.
  * @property {boolean} [flipX=false] Reverse horizontal texture sampling.

@@ -32,6 +32,8 @@ uniform float uUseTexture;
 uniform float uSkyProjection;
 uniform vec3 uCameraPosition;
 uniform float uCameraYaw;
+uniform float uAlphaMode;
+uniform float uAlphaCutoff;
 
 void main() {
   vec3 viewDirection = normalize(vWorldPosition - uCameraPosition);
@@ -49,6 +51,14 @@ void main() {
   vec4 texturedColor = vec4(tex.rgb, tex.a * vColor.a);
   vec4 baseColor = mix(vColor, texturedColor, uUseTexture);
 
-  gl_FragColor = vec4(baseColor.rgb * vLightLevel, baseColor.a);
+  float outputAlpha = baseColor.a;
+  if (uAlphaMode < 0.5) {
+    outputAlpha = 1.0;
+  } else if (uAlphaMode < 1.5) {
+    if (baseColor.a < uAlphaCutoff) discard;
+    outputAlpha = 1.0;
+  }
+
+  gl_FragColor = vec4(baseColor.rgb * vLightLevel, outputAlpha);
 }
 `;

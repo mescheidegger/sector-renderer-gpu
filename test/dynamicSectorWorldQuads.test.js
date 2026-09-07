@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createDynamicSectorWorldQuads } from '../src/index.js';
-import { WebGLRendererHost } from '../src/webgl/WebGLRendererHost.js';
+import { resolveWorldQuadDraws, WebGLRendererHost } from '../src/webgl/WebGLRendererHost.js';
 import { singleSectorMap } from './fixtures/syntheticMaps.js';
 
 test('generic floor updates use exact IDs, leave the authored world untouched, and reject invalid heights', () => {
@@ -33,7 +33,7 @@ test('dynamic surface drawing preserves fallback color, animated materials, UVs,
   let culling = false;
   let texture;
   const gl = {
-    ARRAY_BUFFER: 1, ELEMENT_ARRAY_BUFFER: 2, CULL_FACE: 3, BACK: 4,
+    ARRAY_BUFFER: 1, ELEMENT_ARRAY_BUFFER: 2, CULL_FACE: 3, BACK: 4, DEPTH_TEST: 5,
     bindBuffer() {},
     bufferData(target, data) { if (target === this.ARRAY_BUFFER) packed = Array.from(data); },
     uniformMatrix4fv() {},
@@ -42,6 +42,7 @@ test('dynamic surface drawing preserves fallback color, animated materials, UVs,
     bindTexture(_target, value) { texture = value; },
     enable(cap) { if (cap === this.CULL_FACE) culling = true; },
     disable(cap) { if (cap === this.CULL_FACE) culling = false; },
+    depthMask() {},
     cullFace(face) { assert.equal(face, this.BACK); },
     drawElements() { draws.push({ packed, useTexture, culling, texture }); }
   };
@@ -56,7 +57,8 @@ test('dynamic surface drawing preserves fallback color, animated materials, UVs,
       return key === 'frame-b' ? { texture: 'frame-b', uvRect: { u0: 0.2, v0: 0.3, u1: 0.5, v1: 0.6 } } : null;
     } }
   });
-  assert.equal(host.drawWorldQuads({ quads, viewProjection: [], timeSeconds: 0.25 }), quads.length);
+  const prepared = resolveWorldQuadDraws(quads, [0, 1, 0], 0, 0);
+  assert.equal(host.drawOpaqueWorldQuads({ draws: prepared, viewProjection: [], timeSeconds: 0.25 }), quads.length);
   assert.equal(culling, false, 'surface culling is restored before other world quads');
   draws.forEach((draw, index) => {
     const quad = quads[index];
@@ -71,6 +73,9 @@ test('dynamic surface drawing preserves fallback color, animated materials, UVs,
       assert.ok(Math.abs(draw.packed[offset + 9] - 128 / 255) < 1e-7);
     }
   });
-  assert.equal(host.drawWorldQuads({ quads: [{ textureKey: 'missing', corners: quads[0].corners }], viewProjection: [] }), 0,
+  const missing = resolveWorldQuadDraws(
+    [{ textureKey: 'missing', corners: quads[0].corners }], [0, 1, 0], 0, 0
+  );
+  assert.equal(host.drawOpaqueWorldQuads({ draws: missing, viewProjection: [] }), 0,
     'ordinary missing sprite/quad textures retain their existing skip behavior');
 });

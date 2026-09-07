@@ -430,13 +430,19 @@ The renderer does not inspect world geometry, determine collisions, detect corne
     [0, 2, 0]  // bottom-left
   ],
   opacity: 1,
+  alphaMode: 'blend',       // 'opaque', 'mask', or 'blend'
+  alphaCutoff: 0.5,         // used only by 'mask'
   lightLevel: 0.65,
   flipX: false,
   flipV: false
 }
 ```
 
-`textureKey` and exactly four cyclic `[x, y, z]` corners are required. With default UVs, use **top-left, top-right, bottom-right, bottom-left** as viewed from the intended front. A triangle can repeat its third corner as the fourth. Default UVs map the texture record's atlas rectangle to that order. `flipX` reverses its left/right coordinates, `flipV` reverses its top/bottom coordinates, and enabling both reverses both axes. Optional `uvs` supplies four `[u,v]` pairs in the same order; these are direct normalized uploaded-image coordinates, so custom UVs take responsibility for atlas placement and supersede both flip flags. `lightLevel` defaults to `1`; values from `0..1` are direct brightness scalars, while values above `1` are interpreted on a `0..255` scale, and the resulting value is clamped to `0..1`. These semantics intentionally match `RendererSector.lightLevel` and are particularly useful when `worldQuads` provide replacement geometry for `dynamicSectorIds`. Quads render in submission order with depth testing and are useful for moving geometry, animated/transient planes, and externally generated surfaces.
+`textureKey` and exactly four cyclic `[x, y, z]` corners are required. With default UVs, use **top-left, top-right, bottom-right, bottom-left** as viewed from the intended front. A triangle can repeat its third corner as the fourth. Default UVs map the texture record's atlas rectangle to that order. `flipX` reverses its left/right coordinates, `flipV` reverses its top/bottom coordinates, and enabling both reverses both axes. Optional `uvs` supplies four `[u,v]` pairs in the same order; these are direct normalized uploaded-image coordinates, so custom UVs take responsibility for atlas placement and supersede both flip flags. `lightLevel` defaults to `1`; values from `0..1` are direct brightness scalars, while values above `1` are interpreted on a `0..255` scale, and the resulting value is clamped to `0..1`. These semantics intentionally match `RendererSector.lightLevel` and are particularly useful when `worldQuads` provide replacement geometry for `dynamicSectorIds`.
+
+`alphaMode` makes world compositing explicit. `'opaque'` ignores calculated fragment alpha, writes opaque color, and writes depth. `'mask'` discards fragments whose combined texture/color/opacity alpha is below `alphaCutoff` (default `0.5`); surviving fragments are opaque and write depth. `'blend'` preserves calculated alpha, depth-tests without writing depth, and joins billboard sprites in one camera-forward, back-to-front transparent-world queue. Object-level sorting cannot perfectly composite intersecting translucent surfaces.
+
+For compatibility, an omitted `alphaMode` resolves in one place: a quad with `opacity < 1` or color alpha below `1` is `'blend'`; otherwise a textured quad is `'mask'` so transparent texture holes remain holes, while an untextured color quad is `'opaque'`. The renderer does not inspect texture pixels to infer translucency. Opaque and masked world quads draw before the transparent queue regardless of submission order.
 
 Renderer-generated surface quads also carry `surfaceType` (`'wall'`, `'floor'`, or `'ceiling'`), RGBA `color` (components in `0..1`), and `projection` (`'world'` by default, or `'sky'`). `surfaceType` enables material-animation resolution at the submitted `timeSeconds` and back-face culling for floors/ceilings; walls remain double-sided. `color` is used when `textureKey` is null or its resolved texture is unavailable. Ordinary quads without these fields retain their default behavior. Explicit UVs from the dynamic builder use the same full-image repeating coordinates as static surfaces.
 

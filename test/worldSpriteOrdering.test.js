@@ -11,9 +11,15 @@ function drawSprites(sprites, yaw = 0) {
     gl: {
       COLOR_BUFFER_BIT: 1,
       DEPTH_BUFFER_BIT: 2,
+      DEPTH_TEST: 3,
+      BLEND: 4,
+      SRC_ALPHA: 5,
+      ONE_MINUS_SRC_ALPHA: 6,
       clear() {},
       useProgram() {},
       uniform1i() {},
+      enable() {},
+      blendFunc() {},
       depthMask: (enabled) => depthMasks.push(enabled)
     },
     program: {},
@@ -24,8 +30,9 @@ function drawSprites(sprites, yaw = 0) {
       get: () => ({ width: 1, height: 1 })
     },
     drawStaticWorld: () => ({ drawCalls: 0, texturedDrawCalls: 0 }),
-    drawWorldQuads: () => 0,
+    drawOpaqueWorldQuads: () => 0,
     drawOverlays: () => 0,
+    setAlphaMode() {},
     drawQuad({ textureKey, quad }) {
       drawn.push({ textureKey, quad });
       return true;
@@ -40,7 +47,7 @@ function drawSprites(sprites, yaw = 0) {
   });
 
   assert.equal(stats.drawCalls, sprites.length);
-  assert.deepEqual(depthMasks, [false, true]);
+  assert.deepEqual(depthMasks, [true, false, true]);
   return drawn;
 }
 

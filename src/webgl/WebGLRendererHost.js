@@ -18,8 +18,63 @@ import { resolveAnimatedMaterialKey } from '../materials/resolveAnimatedMaterial
 // Prevents coplanar precision artifacts; this is not visible presentation spacing.
 export const SURFACE_SEPARATION_EPSILON = 0.001;
 
-// Camera depth is measured in world units, so near-equal depths retain sprite.order semantics.
-const WORLD_SPRITE_DEPTH_EPSILON = 0.000001;
+// Camera depth is measured in world units, so near-equal sprite depths retain sprite.order semantics.
+const TRANSPARENT_WORLD_DEPTH_EPSILON = 0.000001;
+
+export const DEFAULT_WORLD_QUAD_ALPHA_CUTOFF = 0.5;
+
+const ALPHA_MODE_UNIFORM_VALUES = Object.freeze({
+  opaque: 0,
+  mask: 1,
+  blend: 2
+});
+
+/**
+ * Compatibility rule for legacy world quads: submitted translucency stays blended,
+ * while otherwise-opaque textured quads default to a mask so transparent holes survive.
+ */
+export function resolveWorldQuadAlphaMode(quad) {
+  if (quad.alphaMode !== undefined) {
+    if (Object.hasOwn(ALPHA_MODE_UNIFORM_VALUES, quad.alphaMode)) return quad.alphaMode;
+    throw new TypeError(`[SectorRenderer] Unsupported world quad alphaMode "${quad.alphaMode}".`);
+  }
+
+  if ((quad.opacity ?? 1) < 1 || (quad.color?.[3] ?? 1) < 1) return 'blend';
+  return quad.textureKey == null ? 'opaque' : 'mask';
+}
+
+export function resolveWorldQuadAlphaCutoff(alphaCutoff) {
+  if (!Number.isFinite(alphaCutoff)) return DEFAULT_WORLD_QUAD_ALPHA_CUTOFF;
+  return Math.min(1, Math.max(0, alphaCutoff));
+}
+
+export function resolveWorldQuadDraws(quads, cameraForward, viewerX, viewerY) {
+  return quads.map((quad, submissionIndex) => {
+    const center = quad.corners.reduce((sum, corner) => [
+      sum[0] + corner[0], sum[1] + corner[1], sum[2] + corner[2]
+    ], [0, 0, 0]).map((value) => value / quad.corners.length);
+    return {
+      kind: 'quad',
+      quad,
+      alphaMode: resolveWorldQuadAlphaMode(quad),
+      alphaCutoff: resolveWorldQuadAlphaCutoff(quad.alphaCutoff),
+      depth: ((center[0] - viewerX) * cameraForward[0])
+        + ((center[1] - viewerY) * cameraForward[1]),
+      submissionIndex
+    };
+  });
+}
+
+export function compareTransparentWorldDraws(a, b) {
+  if (Math.abs(a.depth - b.depth) > TRANSPARENT_WORLD_DEPTH_EPSILON) {
+    return b.depth - a.depth;
+  }
+  if (a.kind === 'sprite' && b.kind === 'sprite') {
+    const orderDifference = (a.sprite.order ?? 0) - (b.sprite.order ?? 0);
+    if (orderDifference !== 0) return orderDifference;
+  }
+  return a.stableIndex - b.stableIndex;
+}
 
 export function writeQuadVertices(target, {
   corners,
@@ -237,7 +292,9 @@ export class WebGLRendererHost {
         useTexture: this.gl.getUniformLocation(this.program, 'uUseTexture'),
         skyProjection: this.gl.getUniformLocation(this.program, 'uSkyProjection'),
         cameraPosition: this.gl.getUniformLocation(this.program, 'uCameraPosition'),
-        cameraYaw: this.gl.getUniformLocation(this.program, 'uCameraYaw')
+        cameraYaw: this.gl.getUniformLocation(this.program, 'uCameraYaw'),
+        alphaMode: this.gl.getUniformLocation(this.program, 'uAlphaMode'),
+        alphaCutoff: this.gl.getUniformLocation(this.program, 'uAlphaCutoff')
       };
 
       this.meshBuffers = uploadStaticMesh(this.gl, mesh);
@@ -340,6 +397,11 @@ export class WebGLRendererHost {
     gl.vertexAttribPointer(this.attributeLocations.lightLevel, 1, gl.FLOAT, false, stride, 9 * Float32Array.BYTES_PER_ELEMENT);
   }
 
+  setAlphaMode(alphaMode, alphaCutoff = DEFAULT_WORLD_QUAD_ALPHA_CUTOFF) {
+    this.gl.uniform1f(this.uniformLocations.alphaMode, ALPHA_MODE_UNIFORM_VALUES[alphaMode]);
+    this.gl.uniform1f(this.uniformLocations.alphaCutoff, alphaCutoff);
+  }
+
   buildWorldBillboardQuad(
     sprite,
     cameraRight,
@@ -433,7 +495,15 @@ export class WebGLRendererHost {
     };
   }
 
-  drawQuad({ textureKey, quad, viewProjection, flipV = false, flipX = false }) {
+  drawQuad({
+    textureKey,
+    quad,
+    viewProjection,
+    flipV = false,
+    flipX = false,
+    alphaMode = 'opaque',
+    alphaCutoff = DEFAULT_WORLD_QUAD_ALPHA_CUTOFF
+  }) {
     const gl = this.gl;
     const textureRecord = this.textureRegistry.get(textureKey);
     const useTexture = textureRecord && !textureRecord.failed ? 1 : 0;
@@ -466,6 +536,7 @@ export class WebGLRendererHost {
     }
     gl.uniform1f(this.uniformLocations.useTexture, useTexture);
     gl.uniform1f(this.uniformLocations.skyProjection, quad.projection === 'sky' ? 1 : 0);
+    this.setAlphaMode(alphaMode, alphaCutoff);
     if (quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling') {
       gl.enable?.(gl.CULL_FACE);
       gl.cullFace?.(gl.BACK);
@@ -484,6 +555,7 @@ export class WebGLRendererHost {
     gl.uniformMatrix4fv(this.uniformLocations.viewProjection, false, viewProjection);
     gl.uniform3f(this.uniformLocations.cameraPosition, camera.x, camera.y, camera.z);
     gl.uniform1f(this.uniformLocations.cameraYaw, camera.yaw);
+    this.setAlphaMode('opaque');
 
     let drawCalls = 0;
     let texturedDrawCalls = 0;
@@ -519,17 +591,8 @@ export class WebGLRendererHost {
     return { drawCalls, texturedDrawCalls };
   }
 
-  drawWorldSprites({
-    sprites,
-    viewProjection,
-    cameraRight,
-    cameraForward,
-    viewerX,
-    viewerY,
-    viewerZ
-  }) {
-    const gl = this.gl;
-    const resolvedSprites = sprites.map((sprite) => {
+  resolveWorldSpriteDraws({ sprites, cameraRight, cameraForward, viewerX, viewerY, viewerZ, stableIndexOffset = 0 }) {
+    return sprites.map((sprite, submissionIndex) => {
       const textureRecord = this.textureRegistry.get(sprite.textureKey);
       const dimensions = resolveSpriteDimensions(sprite, textureRecord);
       const placement = resolveSurfaceConstrainedBillboardPlacement(
@@ -541,78 +604,91 @@ export class WebGLRendererHost {
       const dx = placement.center[0] - viewerX;
       const dy = placement.center[1] - viewerY;
       const depth = (dx * cameraForward[0]) + (dy * cameraForward[1]);
-      return { sprite, textureRecord, dimensions, placement, depth };
+      return {
+        kind: 'sprite', sprite, textureRecord, dimensions, placement, depth,
+        submissionIndex, stableIndex: stableIndexOffset + submissionIndex
+      };
     });
-    const sorted = resolvedSprites.sort((a, b) => {
-      if (Math.abs(a.depth - b.depth) > WORLD_SPRITE_DEPTH_EPSILON) {
-        return b.depth - a.depth;
-      }
-
-      return (a.sprite.order ?? 0) - (b.sprite.order ?? 0);
-    });
-
-    gl.depthMask(false);
-
-    let draws = 0;
-    for (const { sprite, textureRecord, dimensions, placement } of sorted) {
-      if (!textureRecord || textureRecord.failed) {
-        continue;
-      }
-
-      const quad = this.buildWorldBillboardQuad(
-        {
-          ...sprite,
-          width: dimensions.width,
-          height: dimensions.height
-        },
-        cameraRight,
-        [0, 0, 1],
-        { x: viewerX, y: viewerY, z: viewerZ },
-        placement
-      );
-
-      if (this.drawQuad({
-        textureKey: sprite.textureKey,
-        quad,
-        viewProjection,
-        flipX: sprite.flipX,
-        flipV: sprite.flipV ?? false
-      })) {
-        draws += 1;
-      }
-    }
-
-    gl.depthMask(true);
-
-    return draws;
   }
 
-  drawWorldQuads({ quads, viewProjection, timeSeconds = 0 }) {
-    let draws = 0;
+  drawWorldSprite({ sprite, textureRecord, dimensions, placement, viewProjection, cameraRight, viewerX, viewerY, viewerZ }) {
+    if (!textureRecord || textureRecord.failed) return false;
 
-    for (const quad of quads) {
-      if (this.drawQuad({
-        textureKey: quad.surfaceType
-          ? resolveAnimatedMaterialKey(quad.textureKey, timeSeconds, this.materialAnimations)
-          : quad.textureKey,
-        quad: {
-          corners: quad.corners,
-          opacity: quad.opacity ?? 1,
-          lightLevel: normalizeLightLevel(quad.lightLevel),
-          color: quad.color,
-          surfaceType: quad.surfaceType,
-          projection: quad.projection,
-          uvs: quad.uvs ?? null
-        },
-        viewProjection,
-        flipV: quad.flipV ?? false,
-        flipX: quad.flipX ?? false
-      })) {
-        draws += 1;
-      }
+    const quad = this.buildWorldBillboardQuad(
+      { ...sprite, width: dimensions.width, height: dimensions.height },
+      cameraRight,
+      [0, 0, 1],
+      { x: viewerX, y: viewerY, z: viewerZ },
+      placement
+    );
+
+    return this.drawQuad({
+      textureKey: sprite.textureKey,
+      quad,
+      viewProjection,
+      flipX: sprite.flipX,
+      flipV: sprite.flipV ?? false,
+      alphaMode: 'blend'
+    });
+  }
+
+  drawPreparedWorldQuad({ quad, alphaMode, alphaCutoff }, viewProjection, timeSeconds = 0) {
+    return this.drawQuad({
+      textureKey: quad.surfaceType
+        ? resolveAnimatedMaterialKey(quad.textureKey, timeSeconds, this.materialAnimations)
+        : quad.textureKey,
+      quad: {
+        corners: quad.corners,
+        opacity: quad.opacity ?? 1,
+        lightLevel: normalizeLightLevel(quad.lightLevel),
+        color: quad.color,
+        surfaceType: quad.surfaceType,
+        projection: quad.projection,
+        uvs: quad.uvs ?? null
+      },
+      viewProjection,
+      flipV: quad.flipV ?? false,
+      flipX: quad.flipX ?? false,
+      alphaMode,
+      alphaCutoff
+    });
+  }
+
+  drawOpaqueWorldQuads({ draws, viewProjection, timeSeconds = 0 }) {
+    const gl = this.gl;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    let drawCount = 0;
+
+    for (const draw of draws) {
+      if (draw.alphaMode === 'blend') continue;
+      if (this.drawPreparedWorldQuad(draw, viewProjection, timeSeconds)) drawCount += 1;
     }
 
-    return draws;
+    return drawCount;
+  }
+
+  drawTransparentWorld({ draws, viewProjection, timeSeconds, cameraRight, viewerX, viewerY, viewerZ }) {
+    const gl = this.gl;
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+
+    let drawCount = 0;
+    try {
+      for (const draw of draws.sort(compareTransparentWorldDraws)) {
+        const drawn = draw.kind === 'quad'
+          ? this.drawPreparedWorldQuad(draw, viewProjection, timeSeconds)
+          : this.drawWorldSprite({ ...draw, viewProjection, cameraRight, viewerX, viewerY, viewerZ });
+        if (drawn) drawCount += 1;
+      }
+    } finally {
+      gl.depthMask(true);
+      this.setAlphaMode('opaque');
+    }
+
+    return drawCount;
   }
 
   drawOverlays(overlays) {
@@ -622,17 +698,27 @@ export class WebGLRendererHost {
 
     gl.disable(gl.DEPTH_TEST);
     gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     let draws = 0;
-    for (const overlay of sorted) {
-      const quad = this.buildOverlayQuad(overlay);
-      if (this.drawQuad({ textureKey: overlay.textureKey, quad, viewProjection: overlayProjection })) {
-        draws += 1;
+    try {
+      for (const overlay of sorted) {
+        const quad = this.buildOverlayQuad(overlay);
+        if (this.drawQuad({
+          textureKey: overlay.textureKey,
+          quad,
+          viewProjection: overlayProjection,
+          alphaMode: 'blend'
+        })) {
+          draws += 1;
+        }
       }
+    } finally {
+      gl.depthMask(true);
+      gl.enable(gl.DEPTH_TEST);
+      this.setAlphaMode('opaque');
     }
-
-    gl.depthMask(true);
-    gl.enable(gl.DEPTH_TEST);
 
     return draws;
   }
@@ -642,9 +728,13 @@ export class WebGLRendererHost {
     const start = performance.now();
     const gl = this.gl;
 
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.useProgram(this.program);
     gl.uniform1i(this.uniformLocations.texture, 0);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     const forward = [Math.sin(camera.yaw), Math.cos(camera.yaw), 0];
     const eye = [camera.x, camera.y, camera.z];
@@ -660,18 +750,33 @@ export class WebGLRendererHost {
     const viewProjection = multiplyMat4(projection, view);
 
     const cameraRight = [Math.cos(camera.yaw), -Math.sin(camera.yaw), 0];
+    const preparedWorldQuads = resolveWorldQuadDraws(
+      worldQuads, forward, camera.x, camera.y
+    ).map((draw) => ({ ...draw, stableIndex: draw.submissionIndex }));
+    const preparedSprites = this.resolveWorldSpriteDraws({
+      sprites,
+      cameraRight,
+      cameraForward: forward,
+      viewerX: camera.x,
+      viewerY: camera.y,
+      viewerZ: camera.z,
+      stableIndexOffset: worldQuads.length
+    });
 
     const staticStats = this.drawStaticWorld(viewProjection, camera, timeSeconds);
-    const worldQuadDraws = this.drawWorldQuads({
-      quads: worldQuads,
+    const opaqueWorldQuadDraws = this.drawOpaqueWorldQuads({
+      draws: preparedWorldQuads,
       timeSeconds,
       viewProjection
     });
-    const worldSpriteDraws = this.drawWorldSprites({
-      sprites,
+    const transparentWorldDraws = this.drawTransparentWorld({
+      draws: [
+        ...preparedWorldQuads.filter(({ alphaMode }) => alphaMode === 'blend'),
+        ...preparedSprites
+      ],
       viewProjection,
+      timeSeconds,
       cameraRight,
-      cameraForward: forward,
       viewerX: camera.x,
       viewerY: camera.y,
       viewerZ: camera.z
@@ -680,8 +785,8 @@ export class WebGLRendererHost {
 
     return {
       renderMs: performance.now() - start,
-      drawCalls: staticStats.drawCalls + worldSpriteDraws + worldQuadDraws + overlayDraws,
-      texturedDrawCalls: staticStats.texturedDrawCalls + worldSpriteDraws + worldQuadDraws + overlayDraws
+      drawCalls: staticStats.drawCalls + opaqueWorldQuadDraws + transparentWorldDraws + overlayDraws,
+      texturedDrawCalls: staticStats.texturedDrawCalls + opaqueWorldQuadDraws + transparentWorldDraws + overlayDraws
     };
   }
 
