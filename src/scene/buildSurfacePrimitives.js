@@ -84,8 +84,10 @@ export function buildSurfacePrimitives(map, options = {}) {
   for (const sector of map.sectors) {
     const parent = sector.parentSectorId != null ? sectorById.get(sector.parentSectorId) : null;
     const floorMatchesParent = parent && Math.abs((sector.floor ?? 0) - (parent.floor ?? 0)) <= SURFACE_Z_EPSILON;
-    const expectsFloor = !excludeFloorSectorIds.has(sector.id) && !floorMatchesParent;
-    const expectsCeiling = !parent;
+    const includesFloor = !excludeFloorSectorIds.has(sector.id) && (options.includeFloor?.(sector) ?? true);
+    const expectsFloor = includesFloor && !floorMatchesParent;
+    const expectsCeiling = (options.includeCeilings ?? true) && !parent;
+    if (!expectsFloor && !expectsCeiling) continue;
     const triangleIndices = triangulateSectorPolygon(sector.vertices);
     if ((expectsFloor || expectsCeiling) && triangleIndices.length === 0) {
       throw new Error(
@@ -93,10 +95,10 @@ export function buildSurfacePrimitives(map, options = {}) {
         'Vertices must form a non-degenerate simple polygon.'
       );
     }
-    const floorPrimitive = excludeFloorSectorIds.has(sector.id) || floorMatchesParent
+    const floorPrimitive = !expectsFloor
       ? null
       : buildSurfacePrimitive(sector, 'floor', triangleIndices);
-    const ceilingPrimitive = parent
+    const ceilingPrimitive = !expectsCeiling
       ? null
       : buildSurfacePrimitive(sector, 'ceiling', triangleIndices);
 

@@ -1,16 +1,7 @@
 /**
  * Module: Packs GPU scene primitives into vertex/index buffers grouped by material for efficient static drawing.
  */
-const WALL_UV_SCALE = 1;
-const WALL_HEIGHT_UV_SCALE = 1;
-const PLANAR_UV_SCALE = 1;
-
-function unpackColor(colorHex) {
-  const r = ((colorHex >> 16) & 0xff) / 255;
-  const g = ((colorHex >> 8) & 0xff) / 255;
-  const b = (colorHex & 0xff) / 255;
-  return [r, g, b, 1];
-}
+import { buildSceneQuads } from '../../mesh/buildSceneQuads.js';
 
 function getGroupKey(material, projection, surfaceType) {
   return `${material?.key ?? '__fallback_flat__'}\u0000${projection}\u0000${surfaceType}`;
@@ -93,93 +84,21 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
     }
   };
 
-  for (const wall of gpuScene.walls) {
-    const color = unpackColor(wall.color ?? 0xffffff);
-    const lightLevel = wall.lightLevel ?? 1;
-    const length = Math.hypot(wall.x1 - wall.x0, wall.y1 - wall.y0);
-    const uvScale = Number.isFinite(wall.uvScale) && wall.uvScale > 0 ? wall.uvScale : WALL_UV_SCALE;
-    const uStart = wall.uvUStart ?? ((wall.uvUOffset ?? 0) / uvScale);
-    const uEnd = wall.uvUEnd ?? (((wall.uvUOffset ?? 0) + length) / uvScale);
-    const vBottom = wall.bottomZ / WALL_HEIGHT_UV_SCALE;
-    const vTop = wall.topZ / WALL_HEIGHT_UV_SCALE;
-
-    const leftBottom = { x: wall.x0, y: wall.y0, z: wall.bottomZ, lightLevel };
-    const rightBottom = { x: wall.x1, y: wall.y1, z: wall.bottomZ, lightLevel };
-    const rightTop = { x: wall.x1, y: wall.y1, z: wall.topZ, lightLevel };
-    const leftTop = { x: wall.x0, y: wall.y0, z: wall.topZ, lightLevel };
-
-    pushTriangle({
-      a: leftBottom,
-      b: rightBottom,
-      c: rightTop,
-      uvA: { u: uStart, v: vBottom },
-      uvB: { u: uEnd, v: vBottom },
-      uvC: { u: uEnd, v: vTop },
-      color,
-      kind: 'wall',
-      material: wall.material
-    });
-
-    pushTriangle({
-      a: leftBottom,
-      b: rightTop,
-      c: leftTop,
-      uvA: { u: uStart, v: vBottom },
-      uvB: { u: uEnd, v: vTop },
-      uvC: { u: uStart, v: vTop },
-      color,
-      kind: 'wall',
-      material: wall.material
-    });
-  }
-
-  for (const floor of gpuScene.floors) {
-    const color = unpackColor(floor.color ?? 0x7f7f7f);
-    for (const tri of floor.triangles) {
-      const [baseA, originalB, originalC] = tri.vertices;
-      const cross = ((originalB.x - baseA.x) * (originalC.y - baseA.y)) - ((originalB.y - baseA.y) * (originalC.x - baseA.x));
-      const baseB = cross >= 0 ? originalB : originalC;
-      const baseC = cross >= 0 ? originalC : originalB;
-      const a = { ...baseA, lightLevel: floor.lightLevel ?? 1 };
-      const b = { ...baseB, lightLevel: floor.lightLevel ?? 1 };
-      const c = { ...baseC, lightLevel: floor.lightLevel ?? 1 };
-      const originX = floor.uvOrigin?.x ?? 0;
-      const originY = floor.uvOrigin?.y ?? 0;
+  for (const quad of buildSceneQuads(gpuScene)) {
+    const indices = quad.surfaceType === 'wall' ? [[0, 1, 2], [0, 2, 3]] : [[0, 1, 2]];
+    for (const [ia, ib, ic] of indices) {
+      const position = (index) => {
+        const [x, y, z] = quad.corners[index];
+        return { x, y, z, lightLevel: quad.lightLevel };
+      };
+      const uv = (index) => ({ u: quad.uvs[index][0], v: quad.uvs[index][1] });
       pushTriangle({
-        a,
-        b,
-        c,
-        uvA: { u: (a.x - originX) / PLANAR_UV_SCALE, v: (a.y - originY) / PLANAR_UV_SCALE },
-        uvB: { u: (b.x - originX) / PLANAR_UV_SCALE, v: (b.y - originY) / PLANAR_UV_SCALE },
-        uvC: { u: (c.x - originX) / PLANAR_UV_SCALE, v: (c.y - originY) / PLANAR_UV_SCALE },
-        color,
-        kind: 'floor',
-        material: floor.material
-      });
-    }
-  }
-
-  for (const ceiling of gpuScene.ceilings) {
-    const color = unpackColor(ceiling.color ?? 0xa0a0a0);
-    for (const tri of ceiling.triangles) {
-      const [baseA, originalB, originalC] = tri.vertices;
-      const cross = ((originalB.x - baseA.x) * (originalC.y - baseA.y)) - ((originalB.y - baseA.y) * (originalC.x - baseA.x));
-      const baseB = cross >= 0 ? originalB : originalC;
-      const baseC = cross >= 0 ? originalC : originalB;
-      const a = { ...baseA, lightLevel: ceiling.lightLevel ?? 1 };
-      const b = { ...baseB, lightLevel: ceiling.lightLevel ?? 1 };
-      const c = { ...baseC, lightLevel: ceiling.lightLevel ?? 1 };
-      pushTriangle({
-        a,
-        b: c,
-        c: b,
-        uvA: { u: a.x / PLANAR_UV_SCALE, v: a.y / PLANAR_UV_SCALE },
-        uvB: { u: c.x / PLANAR_UV_SCALE, v: c.y / PLANAR_UV_SCALE },
-        uvC: { u: b.x / PLANAR_UV_SCALE, v: b.y / PLANAR_UV_SCALE },
-        color,
-        kind: 'ceiling',
-        material: ceiling.material,
-        projection: ceiling.projection ?? 'world'
+        a: position(ia), b: position(ib), c: position(ic),
+        uvA: uv(ia), uvB: uv(ib), uvC: uv(ic),
+        color: quad.color,
+        kind: quad.surfaceType,
+        material: quad.textureKey ? { key: quad.textureKey } : null,
+        projection: quad.projection
       });
     }
   }
