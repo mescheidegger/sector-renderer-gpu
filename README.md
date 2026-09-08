@@ -133,7 +133,7 @@ renderer.render({
 // renderer.destroy();
 ```
 
-`camera` is required. `sprites`, `worldQuads`, and `overlays` may be omitted and default to empty arrays.
+`camera` is required. `sprites`, `worldQuads`, and `overlays` may be omitted (or explicitly `undefined`) and default to empty arrays. Explicit `null` is invalid for collection fields.
 
 ## Coordinate System
 
@@ -156,6 +156,8 @@ A `SectorRenderWorld` is:
   portalOpenings: PortalOpening[]     // optional; default []
 }
 ```
+
+Optional world collections, including per-wall `portalLinks`, follow the same rule: omission or `undefined` means empty, while explicit `null` is invalid.
 
 ### `RendererSector`
 

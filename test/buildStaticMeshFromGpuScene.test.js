@@ -44,6 +44,31 @@ test('packs missing materials into surface-compatible fallback groups', () => {
   assert.equal(result.stats.texturedGroupCount, 0);
 });
 
+test('keeps fallback and real __fallback_flat__ material groups distinct in both encounter orders', () => {
+  const fallbackWall = {
+    x0: 0, y0: 0, x1: 1, y1: 0, bottomZ: 0, topZ: 1,
+    color: 0xffffff,
+    material: null
+  };
+  const texturedWall = {
+    x0: 1, y0: 0, x1: 2, y1: 0, bottomZ: 0, topZ: 1,
+    color: 0xffffff,
+    material: { key: '__fallback_flat__', surfaceType: 'wall' }
+  };
+
+  for (const walls of [[fallbackWall, texturedWall], [texturedWall, fallbackWall]]) {
+    const result = buildStaticMeshFromGpuScene({ walls, floors: [], ceilings: [] });
+    const wallGroups = result.mesh.groups.filter(({ surfaceType }) => surfaceType === 'wall');
+
+    assertValidMesh(result);
+    assert.equal(wallGroups.length, 2);
+    assert.deepEqual(wallGroups.map(({ materialKey }) => materialKey).sort(), [null, '__fallback_flat__'].sort());
+    assert.equal(wallGroups.find(({ materialKey }) => materialKey === null).indexCount, 6);
+    assert.equal(wallGroups.find(({ materialKey }) => materialKey === '__fallback_flat__').indexCount, 6);
+    assert.equal(result.stats.texturedGroupCount, 1);
+  }
+});
+
 test('separates sky and world projection groups using the same material', () => {
   const map = singleSectorMap({ floorMaterial: 'shared' });
   map.sectors[0].ceilingMaterial = 'shared';

@@ -37,6 +37,33 @@ test('renderer world boundary validates IDs and references', () => {
   assert.throws(() => api.assertRendererWorld(world({ portalOpenings: [{ ...ref, trimMaterial: 42 }] })), /trimMaterial.*string/);
   assert.throws(() => api.assertRendererWorld({ sectors: [{ ...sector(), floorMaterial: 42 }] }), /floorMaterial.*string/);
   assert.throws(() => api.assertRendererWorld({ sectors: [{ ...sector(), walls: [{ a: 0, b: 1, material: 42 }] }] }), /material.*string/);
+  assert.doesNotThrow(() => api.assertRendererWorld({
+    sectors: [{ ...sector(), walls: [{ a: 0, b: 1, material: '__fallback_flat__' }] }]
+  }));
+});
+
+test('optional world collections accept omission and undefined but reject null and non-arrays before consumption', () => {
+  for (const key of ['dynamicSectorIds', 'portalOpenings']) {
+    assert.doesNotThrow(() => api.assertRendererWorld(world()));
+    assert.doesNotThrow(() => api.assertRendererWorld(world({ [key]: undefined })));
+    assert.doesNotThrow(() => buildGpuScene(world()));
+    assert.doesNotThrow(() => buildGpuScene(world({ [key]: undefined })));
+    for (const invalid of [null, {}, new Set()]) {
+      assert.throws(() => api.assertRendererWorld(world({ [key]: invalid })), new RegExp(`\\[SectorRenderer\\] ${key} must be an array`));
+      assert.throws(() => buildGpuScene(world({ [key]: invalid })), new RegExp(`\\[SectorRenderer\\] ${key} must be an array`));
+    }
+  }
+
+  const withPortalLinks = (portalLinks) => world({
+    sectors: [{ ...sector(), walls: [{ a: 0, b: 1, portalLinks }] }]
+  });
+  assert.doesNotThrow(() => api.assertRendererWorld(world()));
+  assert.doesNotThrow(() => api.assertRendererWorld(withPortalLinks(undefined)));
+  assert.doesNotThrow(() => buildGpuScene(withPortalLinks(undefined)));
+  for (const invalid of [null, {}, new Set()]) {
+    assert.throws(() => api.assertRendererWorld(withPortalLinks(invalid)), /\[SectorRenderer\].*portalLinks must be an array/);
+    assert.throws(() => buildGpuScene(withPortalLinks(invalid)), /\[SectorRenderer\].*portalLinks must be an array/);
+  }
 });
 
 test('ceiling projection accepts world and sky, defaults downstream to world, and rejects other values', () => {
@@ -137,6 +164,39 @@ test('renderer frame boundary validates camera and collections', () => {
   assert.equal(api.assertRendererFrame(frame), frame);
   assert.throws(() => api.assertRendererFrame({ camera: { ...frame.camera, yaw: NaN } }), /yaw.*finite/);
   for (const key of ['sprites', 'worldQuads', 'overlays']) assert.throws(() => api.assertRendererFrame({ ...frame, [key]: {} }), new RegExp(`${key} must be an array`));
+});
+
+test('optional frame collections accept omission and undefined but reject null and non-arrays before host rendering', () => {
+  const camera = { x: 0, y: 0, z: 1, yaw: 0 };
+  const submittedFrames = [];
+  const renderer = {
+    host: {
+      render(frame) {
+        submittedFrames.push(frame);
+        return { renderMs: 0, drawCalls: 0, texturedDrawCalls: 0 };
+      }
+    },
+    createSnapshot() { return {}; }
+  };
+
+  api.SectorRenderer.prototype.render.call(renderer, { camera });
+  assert.deepEqual(submittedFrames.pop(), { camera, sprites: [], worldQuads: [], overlays: [], timeSeconds: 0 });
+
+  for (const key of ['sprites', 'worldQuads', 'overlays']) {
+    const undefinedFrame = { camera, [key]: undefined };
+    assert.equal(api.assertRendererFrame(undefinedFrame), undefinedFrame);
+    api.SectorRenderer.prototype.render.call(renderer, undefinedFrame);
+    assert.deepEqual(submittedFrames.pop()[key], []);
+
+    for (const invalid of [null, {}, new Set()]) {
+      const frame = { camera, [key]: invalid };
+      const expected = new RegExp(`\\[SectorRenderer\\] ${key} must be an array`);
+      assert.throws(() => api.assertRendererFrame(frame), expected);
+      const submissionCount = submittedFrames.length;
+      assert.throws(() => api.SectorRenderer.prototype.render.call(renderer, frame), expected);
+      assert.equal(submittedFrames.length, submissionCount, 'invalid frame is rejected before host/GL submission');
+    }
+  }
 });
 
 test('renderer frame accepts optional simulation time and rejects invalid time', () => {

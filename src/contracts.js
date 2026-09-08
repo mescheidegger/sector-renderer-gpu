@@ -156,7 +156,7 @@ export function assertRendererWorld(world) {
       }
       if (wall.a === wall.b) fail(`Sector "${key}" wall ${wallIndex} must reference two different vertices.`);
       assertMaterialKey(wall.material, `Sector "${key}" wall ${wallIndex} material`);
-      if (wall.portalLinks != null && !Array.isArray(wall.portalLinks)) {
+      if (wall.portalLinks !== undefined && !Array.isArray(wall.portalLinks)) {
         fail(`Sector "${key}" wall ${wallIndex} portalLinks must be an array.`);
       }
     });
@@ -200,7 +200,7 @@ export function assertRendererWorld(world) {
       }
     });
   });
-  if (world.dynamicSectorIds != null && !Array.isArray(world.dynamicSectorIds)) fail('dynamicSectorIds must be an array.');
+  if (world.dynamicSectorIds !== undefined && !Array.isArray(world.dynamicSectorIds)) fail('dynamicSectorIds must be an array.');
   const dynamic = new Set();
   for (const id of world.dynamicSectorIds ?? []) {
     if (id == null) fail('dynamicSectorIds may not contain null IDs.');
@@ -208,7 +208,7 @@ export function assertRendererWorld(world) {
     if (dynamic.has(id)) fail(`Duplicate dynamic sector id "${String(id)}".`);
     dynamic.add(id);
   }
-  if (world.portalOpenings != null && !Array.isArray(world.portalOpenings)) fail('portalOpenings must be an array.');
+  if (world.portalOpenings !== undefined && !Array.isArray(world.portalOpenings)) fail('portalOpenings must be an array.');
   const refs = new Set();
   (world.portalOpenings ?? []).forEach((opening, index) => {
     const ref = opening?.wallRef;
@@ -235,6 +235,6 @@ export function assertRendererFrame(frame) {
   if (!frame.camera || typeof frame.camera !== 'object') fail('Renderer frame requires a camera.');
   for (const key of ['x', 'y', 'z', 'yaw']) if (!Number.isFinite(frame.camera[key])) fail(`Camera ${key} must be a finite number.`);
   if (frame.timeSeconds != null && (!Number.isFinite(frame.timeSeconds) || frame.timeSeconds < 0)) fail('timeSeconds must be a non-negative finite number.');
-  for (const key of ['sprites', 'worldQuads', 'overlays']) if (frame[key] != null && !Array.isArray(frame[key])) fail(`${key} must be an array.`);
+  for (const key of ['sprites', 'worldQuads', 'overlays']) if (frame[key] !== undefined && !Array.isArray(frame[key])) fail(`${key} must be an array.`);
   return frame;
 }

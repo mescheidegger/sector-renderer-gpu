@@ -3,14 +3,11 @@
  */
 import { buildSceneQuads } from '../../mesh/buildSceneQuads.js';
 
-function getGroupKey(material, projection, surfaceType) {
-  return `${material?.key ?? '__fallback_flat__'}\u0000${projection}\u0000${surfaceType}`;
-}
-
 /** Builds packed static mesh buffers and stats from GPU scene primitives. */
 export function buildStaticMeshFromGpuScene(gpuScene) {
   const vertices = [];
-  const groupIndexMap = new Map();
+  const groupLookup = new Map();
+  const unpackedGroups = [];
   const materialSets = {
     wall: new Set(),
     floor: new Set(),
@@ -32,18 +29,30 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
   };
 
   const getGroup = (material, fallbackColor, surfaceType, projection = 'world') => {
-    const groupKey = getGroupKey(material, projection, surfaceType);
-    if (!groupIndexMap.has(groupKey)) {
-      groupIndexMap.set(groupKey, {
-        materialKey: material?.key ?? null,
+    const materialKey = material?.key ?? null;
+    let projectionGroups = groupLookup.get(materialKey);
+    if (!projectionGroups) {
+      projectionGroups = new Map();
+      groupLookup.set(materialKey, projectionGroups);
+    }
+    let surfaceGroups = projectionGroups.get(projection);
+    if (!surfaceGroups) {
+      surfaceGroups = new Map();
+      projectionGroups.set(projection, surfaceGroups);
+    }
+    if (!surfaceGroups.has(surfaceType)) {
+      const group = {
+        materialKey,
         surfaceType,
         projection,
         fallbackColor,
         indices: []
-      });
+      };
+      surfaceGroups.set(surfaceType, group);
+      unpackedGroups.push(group);
     }
 
-    return groupIndexMap.get(groupKey);
+    return surfaceGroups.get(surfaceType);
   };
 
   const pushVertex = (position, uv, color, lightLevel) => {
@@ -106,7 +115,7 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
   const groups = [];
   const packedIndices = [];
 
-  for (const group of groupIndexMap.values()) {
+  for (const group of unpackedGroups) {
     const startIndex = packedIndices.length;
     packedIndices.push(...group.indices);
 
