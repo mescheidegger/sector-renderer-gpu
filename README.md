@@ -315,7 +315,7 @@ Static material keys resolve either directly through the caller's `TextureProvid
 
 Static walls, floors, and `'world'` ceilings use baked world/planar repeating coordinates and are not remapped through a record's `uvRect` at draw time. A `'sky'` ceiling instead derives UVs at draw time from viewing direction. Consequently, use **full-image texture records for repeating static materials**, including panoramic sky materials. Atlas sub-region records work with the default UV generation used by sprites, world quads, and overlays, but are not a safe source for a wrapping sky panorama or a general repeating static-world material.
 
-Under the current WebGL1 upload policy, power-of-two image dimensions use `REPEAT` wrapping, mipmaps, and anisotropy where supported. Non-power-of-two images use `CLAMP_TO_EDGE` and no mipmaps. If a static material needs to tile beyond `0..1`, use a power-of-two uploaded image. In particular, a panorama expected to wrap seamlessly through 360 degrees must be supplied as a full-image record whose upload is compatible with horizontal repeat under this policy.
+Repeat intent is declared by the texture record's optional `wrap` field. Explicit `wrap: 'repeat'` records use native `REPEAT`, mipmaps, and anisotropy when their uploaded dimensions are power-of-two. Under WebGL1, repeating NPOT images remain `CLAMP_TO_EDGE` and non-mipmapped at upload, while the fragment shader emulates bilinear repeat across both axes. This preserves the full source-image repeat period for coordinates outside `0..1` without resizing the source. Explicit `wrap: 'clamp'` records always clamp; POT clamp records retain mipmaps. Repeating records must use a full-image `uvRect` because atlas neighbours cannot safely participate in repetition. Omitting `wrap` retains the legacy dimension-based behavior for existing providers.
 
 ## TextureProvider
 
@@ -329,6 +329,7 @@ const textureProvider = {
     return {
       image: stoneImage,
       uploadKey: 'stone-image',
+      wrap: 'repeat',
       uvRect: { u0: 0, v0: 0, u1: 1, v1: 1 },
       width: 128,
       height: 128,
@@ -348,6 +349,7 @@ Every startup key returned by `getTextureKeys()` is a declaration that `getTextu
 | --- | --- | --- |
 | `image` | Required | A non-null WebGL `texImage2D` browser source, normally `HTMLImageElement`, `HTMLCanvasElement`, `ImageBitmap`, `ImageData`, `HTMLVideoElement`, or `OffscreenCanvas` where supported by the browser/WebGL implementation. |
 | `uploadKey` | Required non-empty string | Stable identity of the underlying GPU upload. Multiple logical keys can share one upload. The same `uploadKey` plus the same image object is allowed; the same key with a different image object is rejected. |
+| `wrap` | Optional `'clamp'` or `'repeat'` | Explicit sampling intent. Repeat works for POT and NPOT full-image uploads; repeat records must use the full `0..1` `uvRect`. Omission preserves legacy dimension-based selection. |
 | `uvRect` | Required | Normalized atlas bounds in `0..1`: `{u0,v0,u1,v1}` with non-reversed ranges. Full texture: `{ u0: 0, v0: 0, u1: 1, v1: 1 }`. |
 | `width`, `height` | Required positive numbers | Logical dimensions of this key/region, not necessarily the uploaded image's pixel dimensions. They are sprite sizing fallbacks. |
 | `sourceSize` | Optional `{w,h}` or null | Positive untrimmed logical dimensions. Sprite auto-sizing prefers these, allowing a trimmed atlas sprite to retain its original layout size. |
@@ -365,7 +367,7 @@ const provider = {
 };
 ```
 
-Sharing by `uploadKey` is generic, but `uvRect` sub-regions are applied by default only to sprites, world quads, and overlays. Repeating static materials should currently use a full-image record (`0..1` UV rectangle), preferably backed by a power-of-two image.
+Sharing by `uploadKey` is generic, but `uvRect` sub-regions are applied by default only to sprites, world quads, and overlays. Repeating static materials use `wrap: 'repeat'` with a full-image record (`0..1` UV rectangle). POT sources take the native mipmapped path; NPOT sources take the WebGL1-safe shader-repeat path.
 
 ## Rendering Frames
 

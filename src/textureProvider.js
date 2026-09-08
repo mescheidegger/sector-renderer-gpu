@@ -2,6 +2,7 @@
  * @typedef {Object} RendererTextureRecord
  * @property {CanvasImageSource} image Image source uploaded to WebGL.
  * @property {string} uploadKey Stable identity of the underlying GPU upload.
+ * @property {'clamp'|'repeat'} [wrap] Explicit sampling intent. Omitted records retain the legacy dimension-based upload behavior.
  * @property {{u0: number, v0: number, u1: number, v1: number}} uvRect Normalized sampling rectangle.
  * @property {number} width Logical texture width.
  * @property {number} height Logical texture height.
@@ -64,10 +65,16 @@ export function assertRendererTextureRecord(record, key = null) {
   if (!record || typeof record !== 'object') throw new TypeError(`[SectorRenderer] Missing texture record${label}.`);
   if (record.image == null) throw new TypeError(`[SectorRenderer] Texture image${label} must be non-null.`);
   if (typeof record.uploadKey !== 'string' || record.uploadKey.length === 0) throw new TypeError(`[SectorRenderer] Texture uploadKey${label} must be a non-empty string.`);
+  if (record.wrap != null && record.wrap !== 'clamp' && record.wrap !== 'repeat') {
+    throw new TypeError(`[SectorRenderer] Texture wrap${label} must be "clamp" or "repeat" when provided.`);
+  }
   const uv = record.uvRect;
   if (!uv || typeof uv !== 'object') throw new TypeError(`[SectorRenderer] Texture uvRect${label} is required.`);
   for (const name of ['u0', 'v0', 'u1', 'v1']) if (!Number.isFinite(uv[name]) || uv[name] < 0 || uv[name] > 1) throw new TypeError(`[SectorRenderer] Texture uvRect.${name}${label} must be within 0..1.`);
   if (uv.u1 < uv.u0 || uv.v1 < uv.v0) throw new TypeError(`[SectorRenderer] Texture uvRect${label} must not be reversed.`);
+  if (record.wrap === 'repeat' && (uv.u0 !== 0 || uv.v0 !== 0 || uv.u1 !== 1 || uv.v1 !== 1)) {
+    throw new TypeError(`[SectorRenderer] Repeating texture${label} must use a full-image 0..1 uvRect.`);
+  }
   for (const name of ['width', 'height']) if (!Number.isFinite(record[name]) || record[name] <= 0) throw new TypeError(`[SectorRenderer] Texture ${name}${label} must be finite and positive.`);
   if (record.sourceSize != null) for (const name of ['w', 'h']) if (!Number.isFinite(record.sourceSize[name]) || record.sourceSize[name] <= 0) throw new TypeError(`[SectorRenderer] Texture sourceSize.${name}${label} must be finite and positive.`);
   return record;

@@ -294,7 +294,9 @@ export class WebGLRendererHost {
         cameraPosition: this.gl.getUniformLocation(this.program, 'uCameraPosition'),
         cameraYaw: this.gl.getUniformLocation(this.program, 'uCameraYaw'),
         alphaMode: this.gl.getUniformLocation(this.program, 'uAlphaMode'),
-        alphaCutoff: this.gl.getUniformLocation(this.program, 'uAlphaCutoff')
+        alphaCutoff: this.gl.getUniformLocation(this.program, 'uAlphaCutoff'),
+        emulateRepeat: this.gl.getUniformLocation(this.program, 'uEmulateRepeat'),
+        textureSize: this.gl.getUniformLocation(this.program, 'uTextureSize')
       };
 
       this.meshBuffers = uploadStaticMesh(this.gl, mesh);
@@ -400,6 +402,18 @@ export class WebGLRendererHost {
   setAlphaMode(alphaMode, alphaCutoff = DEFAULT_WORLD_QUAD_ALPHA_CUTOFF) {
     this.gl.uniform1f(this.uniformLocations.alphaMode, ALPHA_MODE_UNIFORM_VALUES[alphaMode]);
     this.gl.uniform1f(this.uniformLocations.alphaCutoff, alphaCutoff);
+  }
+
+  setTextureSampling(textureRecord) {
+    const emulateRepeat = textureRecord?.repeatMode === 'shader';
+    this.gl.uniform1f(this.uniformLocations.emulateRepeat, emulateRepeat ? 1 : 0);
+    if (emulateRepeat) {
+      this.gl.uniform2f(
+        this.uniformLocations.textureSize,
+        textureRecord.uploadWidth,
+        textureRecord.uploadHeight
+      );
+    }
   }
 
   buildWorldBillboardQuad(
@@ -536,6 +550,7 @@ export class WebGLRendererHost {
     }
     gl.uniform1f(this.uniformLocations.useTexture, useTexture);
     gl.uniform1f(this.uniformLocations.skyProjection, quad.projection === 'sky' ? 1 : 0);
+    this.setTextureSampling(textureRecord);
     this.setAlphaMode(alphaMode, alphaCutoff);
     if (quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling') {
       gl.enable?.(gl.CULL_FACE);
@@ -578,6 +593,7 @@ export class WebGLRendererHost {
 
       gl.uniform1f(this.uniformLocations.useTexture, useTexture);
       gl.uniform1f(this.uniformLocations.skyProjection, group.projection === 'sky' ? 1 : 0);
+      this.setTextureSampling(textureRecord);
       gl.drawElements(
         gl.TRIANGLES,
         group.indexCount,

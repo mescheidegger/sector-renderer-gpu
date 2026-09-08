@@ -16,8 +16,12 @@ function createTrackedGl(options = {}) {
     deletedTextures: [],
     deletedShaders: [],
     deletedPrograms: [],
+    textureParameters: [],
+    mipmappedTextures: [],
+    pixelStore: [],
     errors: []
   };
+  let boundTexture = null;
   const noop = () => {};
   const gl = {
     NO_ERROR: 0,
@@ -93,17 +97,20 @@ function createTrackedGl(options = {}) {
       if (state.textureAllocations === options.textureAllocationFailureAt) return null;
       return { kind: 'texture', id: state.textureAllocations };
     },
-    bindTexture: noop,
-    pixelStorei: noop,
+    bindTexture(_target, texture) { boundTexture = texture; },
+    pixelStorei(parameter, value) { state.pixelStore.push([parameter, value]); },
     texImage2D() {
       state.textureUploads += 1;
       if (state.textureUploads === options.textureUploadErrorAt) {
         state.errors.push(gl.INVALID_VALUE);
       }
     },
-    texParameteri: noop,
+    texParameteri(_target, parameter, value) {
+      state.textureParameters.push([boundTexture?.id ?? null, parameter, value]);
+    },
     texParameterf: noop,
     generateMipmap() {
+      state.mipmappedTextures.push(boundTexture?.id ?? null);
       if (options.mipmapError) state.errors.push(gl.INVALID_OPERATION);
     },
     deleteTexture(texture) { state.deletedTextures.push(texture); },
@@ -134,10 +141,11 @@ const mesh = () => ({
 
 const image = (width = 2, height = 2) => ({ width, height });
 
-function textureRecord(uploadKey, textureImage = image()) {
+function textureRecord(uploadKey, textureImage = image(), wrap) {
   return {
     image: textureImage,
     uploadKey,
+    ...(wrap ? { wrap } : {}),
     uvRect: { u0: 0, v0: 0, u1: 1, v1: 1 },
     width: textureImage.width,
     height: textureImage.height
@@ -280,6 +288,42 @@ test('texture uploadKey deduplication retains one loaded GPU texture and destroy
   registry.destroy();
   registry.destroy();
   assert.deepEqual(ids(state.deletedTextures), [1]);
+});
+
+test('explicit repeat and clamp intent select WebGL1-safe upload and repeat strategies', () => {
+  const { gl, state } = createTrackedGl();
+  const registry = createTextureRegistry(gl, ['npot-repeat', 'pot-repeat', 'pot-clamp'], provider({
+    'npot-repeat': textureRecord('npot-repeat', image(128, 112), 'repeat'),
+    'pot-repeat': textureRecord('pot-repeat', image(128, 128), 'repeat'),
+    'pot-clamp': textureRecord('pot-clamp', image(64, 32), 'clamp')
+  }));
+
+  assert.deepEqual({
+    wrap: registry.get('npot-repeat').wrap,
+    repeatMode: registry.get('npot-repeat').repeatMode,
+    logicalSize: [registry.get('npot-repeat').width, registry.get('npot-repeat').height],
+    uploadSize: [registry.get('npot-repeat').uploadWidth, registry.get('npot-repeat').uploadHeight]
+  }, {
+    wrap: 'repeat', repeatMode: 'shader', logicalSize: [128, 112], uploadSize: [128, 112]
+  });
+  assert.equal(registry.get('pot-repeat').repeatMode, 'hardware');
+  assert.deepEqual(
+    { wrap: registry.get('pot-clamp').wrap, repeatMode: registry.get('pot-clamp').repeatMode },
+    { wrap: 'clamp', repeatMode: 'none' }
+  );
+
+  const lastParameter = (textureId, parameter) => state.textureParameters
+    .filter(([id, name]) => id === textureId && name === parameter).at(-1)?.[2];
+  assert.equal(lastParameter(1, gl.TEXTURE_WRAP_S), gl.CLAMP_TO_EDGE);
+  assert.equal(lastParameter(1, gl.TEXTURE_WRAP_T), gl.CLAMP_TO_EDGE);
+  assert.equal(lastParameter(1, gl.TEXTURE_MIN_FILTER), gl.LINEAR);
+  assert.equal(lastParameter(2, gl.TEXTURE_WRAP_S), gl.REPEAT);
+  assert.equal(lastParameter(2, gl.TEXTURE_WRAP_T), gl.REPEAT);
+  assert.equal(lastParameter(2, gl.TEXTURE_MIN_FILTER), gl.LINEAR_MIPMAP_LINEAR);
+  assert.equal(lastParameter(3, gl.TEXTURE_WRAP_S), gl.CLAMP_TO_EDGE);
+  assert.equal(lastParameter(3, gl.TEXTURE_WRAP_T), gl.CLAMP_TO_EDGE);
+  assert.equal(lastParameter(3, gl.TEXTURE_MIN_FILTER), gl.LINEAR_MIPMAP_LINEAR);
+  assert.deepEqual(state.mipmappedTextures, [2, 3]);
 });
 
 test('shader and program construction cleans up exact resources at every failure stage', () => {
