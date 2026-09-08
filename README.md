@@ -446,6 +446,8 @@ The renderer does not inspect world geometry, determine collisions, detect corne
 
 For compatibility, an omitted `alphaMode` resolves in one place: a quad with `opacity < 1` or color alpha below `1` is `'blend'`; otherwise a textured quad is `'mask'` so transparent texture holes remain holes, while an untextured color quad is `'opaque'`. The renderer does not inspect texture pixels to infer translucency. Opaque and masked world quads draw before the transparent queue regardless of submission order.
 
+Quads produced by `createDynamicSectorWorldQuads` explicitly use `'opaque'`, preserving the compositing and depth-write policy of their equivalent static renderer-generated surfaces without changing the omitted-mode behavior of caller-submitted world quads.
+
 Renderer-generated surface quads also carry `surfaceType` (`'wall'`, `'floor'`, or `'ceiling'`), RGBA `color` (components in `0..1`), and `projection` (`'world'` by default, or `'sky'`). `surfaceType` enables material-animation resolution at the submitted `timeSeconds` and back-face culling for floors/ceilings; walls remain double-sided. `color` is used when `textureKey` is null or its resolved texture is unavailable. Ordinary quads without these fields retain their default behavior. Explicit UVs from the dynamic builder use the same full-image repeating coordinates as static surfaces.
 
 ### `RendererOverlay`

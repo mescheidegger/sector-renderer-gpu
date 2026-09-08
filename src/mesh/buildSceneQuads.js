@@ -12,6 +12,9 @@ function attributes(primitive, surfaceType, defaultColor) {
     textureKey: primitive.material?.key ?? null,
     color: unpackColor(primitive.color ?? defaultColor),
     lightLevel: primitive.lightLevel ?? 1,
+    // Static world batches use opaque compositing; retain that policy when
+    // the same renderer-generated surface is transported as a world quad.
+    alphaMode: 'opaque',
     surfaceType,
     projection: primitive.projection ?? 'world'
   };

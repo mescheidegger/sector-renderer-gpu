@@ -2,8 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createDynamicSectorWorldQuads } from '../src/index.js';
+import { buildGpuScene } from '../src/buildGpuScene.js';
+import { buildSceneQuads } from '../src/mesh/buildSceneQuads.js';
 import { resolveWorldQuadDraws, WebGLRendererHost } from '../src/webgl/WebGLRendererHost.js';
 import { singleSectorMap } from './fixtures/syntheticMaps.js';
+
+function geometryKey({ surfaceType, textureKey, corners, uvs }) {
+  return JSON.stringify({ surfaceType, textureKey, corners, uvs });
+}
 
 test('generic floor updates use exact IDs, leave the authored world untouched, and reject invalid heights', () => {
   const world = singleSectorMap();
@@ -21,6 +27,42 @@ test('generic floor updates use exact IDs, leave the authored world untouched, a
   assert.ok(build().filter(({ surfaceType }) => surfaceType === 'floor').every(({ corners }) => corners.every((point) => point[2] === 0)));
 });
 
+test('renderer-generated static and dynamic surfaces share opaque compositing semantics', () => {
+  // The renderer does not inspect texture pixels, so this material may contain
+  // opaque, partially transparent, and fully transparent texels.
+  const alphaBearingMaterial = 'rgba-alpha-spectrum';
+  const staticWorld = singleSectorMap({
+    wallMaterial: alphaBearingMaterial,
+    floorMaterial: alphaBearingMaterial,
+    ceilingMaterial: alphaBearingMaterial
+  });
+  const staticQuads = [...buildSceneQuads(buildGpuScene(staticWorld))];
+  const staticByGeometry = new Map(staticQuads.map((quad) => [geometryKey(quad), quad]));
+
+  const dynamicWorld = structuredClone(staticWorld);
+  dynamicWorld.dynamicSectorIds = ['room'];
+  const dynamicQuads = createDynamicSectorWorldQuads(dynamicWorld)(new Map([['room', 0]]));
+
+  assert.ok(staticQuads.length > dynamicQuads.length, 'the static scene additionally contains its ceiling');
+  assert.ok(staticQuads.every(({ alphaMode }) => alphaMode === 'opaque'));
+  for (const dynamicQuad of dynamicQuads) {
+    const staticEquivalent = staticByGeometry.get(geometryKey(dynamicQuad));
+    assert.ok(staticEquivalent, 'each replacement quad has equivalent static geometry');
+    assert.equal(dynamicQuad.alphaMode, staticEquivalent.alphaMode);
+    assert.equal(resolveWorldQuadDraws([dynamicQuad], [0, 1, 0], 0, 0)[0].alphaMode, 'opaque');
+  }
+
+  const genericTexturedQuad = {
+    textureKey: alphaBearingMaterial,
+    corners: dynamicQuads[0].corners
+  };
+  assert.equal(
+    resolveWorldQuadDraws([genericTexturedQuad], [0, 1, 0], 0, 0)[0].alphaMode,
+    'mask',
+    'ordinary textured world quads retain the compatibility default'
+  );
+});
+
 test('dynamic surface drawing preserves fallback color, animated materials, UVs, light, and floor culling', () => {
   const world = singleSectorMap({ lightLevel: 128, floorMaterial: 'animated-floor', wallMaterial: null });
   world.sectors[0].walls[0].material = 'missing-wall';
@@ -32,37 +74,45 @@ test('dynamic surface drawing preserves fallback color, animated materials, UVs,
   let useTexture;
   let culling = false;
   let texture;
+  let depthWrites;
+  let alphaModeUniform;
   const gl = {
     ARRAY_BUFFER: 1, ELEMENT_ARRAY_BUFFER: 2, CULL_FACE: 3, BACK: 4, DEPTH_TEST: 5,
     bindBuffer() {},
     bufferData(target, data) { if (target === this.ARRAY_BUFFER) packed = Array.from(data); },
     uniformMatrix4fv() {},
-    uniform1f(location, value) { if (location === 'useTexture') useTexture = value; },
+    uniform1f(location, value) {
+      if (location === 'useTexture') useTexture = value;
+      if (location === 'alphaMode') alphaModeUniform = value;
+    },
     activeTexture() {},
     bindTexture(_target, value) { texture = value; },
     enable(cap) { if (cap === this.CULL_FACE) culling = true; },
     disable(cap) { if (cap === this.CULL_FACE) culling = false; },
-    depthMask() {},
+    depthMask(enabled) { depthWrites = enabled; },
     cullFace(face) { assert.equal(face, this.BACK); },
-    drawElements() { draws.push({ packed, useTexture, culling, texture }); }
+    drawElements() { draws.push({ packed, useTexture, culling, texture, depthWrites, alphaModeUniform }); }
   };
   const host = Object.create(WebGLRendererHost.prototype);
   Object.assign(host, {
     gl,
     setupVertexAttributes() {},
     dynamicBuffers: { vertexBuffer: {}, indexBuffer: {}, indices: new Uint16Array([0, 1, 2, 0, 2, 3]) },
-    uniformLocations: { useTexture: 'useTexture' },
+    uniformLocations: { useTexture: 'useTexture', alphaMode: 'alphaMode', alphaCutoff: 'alphaCutoff' },
     materialAnimations: new Map([['animated-floor', { frames: ['frame-a', 'frame-b'], frameDurationSeconds: 0.25 }]]),
     textureRegistry: { get(key) {
       return key === 'frame-b' ? { texture: 'frame-b', uvRect: { u0: 0.2, v0: 0.3, u1: 0.5, v1: 0.6 } } : null;
     } }
   });
   const prepared = resolveWorldQuadDraws(quads, [0, 1, 0], 0, 0);
+  assert.ok(prepared.every(({ alphaMode }) => alphaMode === 'opaque'));
   assert.equal(host.drawOpaqueWorldQuads({ draws: prepared, viewProjection: [], timeSeconds: 0.25 }), quads.length);
   assert.equal(culling, false, 'surface culling is restored before other world quads');
   draws.forEach((draw, index) => {
     const quad = quads[index];
     const floor = quad.surfaceType === 'floor';
+    assert.equal(draw.alphaModeUniform, 0, 'replacement surfaces select the opaque shader branch');
+    assert.equal(draw.depthWrites, true, 'replacement surfaces retain opaque depth writes');
     assert.equal(draw.useTexture, floor ? 1 : 0);
     assert.equal(draw.culling, floor);
     if (floor) assert.equal(draw.texture, 'frame-b');
