@@ -33,6 +33,8 @@ export class SectorRenderer {
   }) {
     this.debug = debug;
     this.world = world;
+    this.rendererLifecycle = 'restoring';
+    this.restoreError = null;
 
     assertTextureProvider(textureProvider);
     this.materialAnimations = validateMaterialAnimations(materialAnimations, textureProvider);
@@ -49,7 +51,26 @@ export class SectorRenderer {
       projection,
       mesh: sceneBuild.mesh,
       textureProvider,
-      materialAnimations: this.materialAnimations
+      materialAnimations: this.materialAnimations,
+      onLifecycleChange: ({ state, error }) => {
+        this.rendererLifecycle = state;
+        this.restoreError = error?.message ?? null;
+        if (this.debugSnapshot) {
+          const textureStats = this.host?.getTextureStats?.();
+          this.debugSnapshot = {
+            ...this.debugSnapshot,
+            gpu: {
+              ...this.debugSnapshot.gpu,
+              lifecycle: state,
+              restoreError: this.restoreError,
+              ...(textureStats
+                ? { texturesLoaded: textureStats.loaded, texturesTotal: textureStats.total }
+                : {}),
+              ...(this.host ? { uploadInitMs: this.host.initMs } : {})
+            }
+          };
+        }
+      }
     });
 
     this.meshStats = sceneBuild.meshStats;
@@ -121,6 +142,8 @@ export class SectorRenderer {
       buildMs: this.buildMs,
       uploadInitMs: this.host.initMs,
       renderMs,
+      lifecycle: this.rendererLifecycle,
+      restoreError: this.restoreError,
       seamDebug: this.gpuScene.seamDebug ?? null
     });
   }

@@ -254,69 +254,213 @@ function deleteDynamicBuffers(gl, dynamicBuffers) {
   }
 }
 
+function deleteGpuResourceSet(gl, {
+  program = null,
+  meshBuffers = null,
+  textureRegistry = null,
+  dynamicBuffers = null
+} = {}) {
+  if (!gl) return;
+  deleteDynamicBuffers(gl, dynamicBuffers);
+  textureRegistry?.destroy?.();
+  deleteStaticMeshBuffers(gl, meshBuffers);
+  if (program) gl.deleteProgram(program);
+}
+
 /** Low-level WebGL host that owns GPU resources and performs all frame drawing. */
 export class WebGLRendererHost {
-  constructor({ canvas, container, width = 1280, height = 720, pixelRatio = 1, projection, mesh, textureProvider, materialAnimations = new Map() }) {
+  constructor({
+    canvas,
+    container,
+    width = 1280,
+    height = 720,
+    pixelRatio = 1,
+    projection,
+    mesh,
+    textureProvider,
+    materialAnimations = new Map(),
+    onLifecycleChange = null
+  }) {
     const canvasTarget = resolveCanvasTarget({ canvas, container });
     this.canvas = canvasTarget.canvas;
     this.ownsCanvas = canvasTarget.ownsCanvas;
     this.ownerContainer = canvasTarget.ownerContainer;
+    this.lifecycle = 'restoring';
+    this.lastRestoreError = null;
+    this.onLifecycleChange = onLifecycleChange;
+    this.contextListenersInstalled = false;
+    this.handleContextLost = this.handleContextLost.bind(this);
+    this.handleContextRestored = this.handleContextRestored.bind(this);
     this.gl = null;
     this.program = null;
+    this.attributeLocations = null;
+    this.uniformLocations = null;
     this.meshBuffers = null;
     this.textureRegistry = null;
     this.dynamicBuffers = null;
+    this.staticMesh = mesh;
+    this.textureProvider = textureProvider;
+    this.textureKeys = null;
     try {
       this.projection = resolveProjection(projection);
       this.materialAnimations = materialAnimations;
+      this.installContextListeners();
+      this.resize(width, height, { pixelRatio });
 
       this.gl = createWebGLContext(this.canvas);
 
       const initStart = performance.now();
-
-      this.program = createShaderProgram(this.gl, {
-        vertexSource: TEXTURED_VERTEX_SHADER,
-        fragmentSource: TEXTURED_FRAGMENT_SHADER
-      });
-
-      this.attributeLocations = {
-        position: this.gl.getAttribLocation(this.program, 'aPosition'),
-        uv: this.gl.getAttribLocation(this.program, 'aUv'),
-        color: this.gl.getAttribLocation(this.program, 'aColor'),
-        lightLevel: this.gl.getAttribLocation(this.program, 'aLightLevel')
-      };
-
-      this.uniformLocations = {
-        viewProjection: this.gl.getUniformLocation(this.program, 'uViewProjection'),
-        texture: this.gl.getUniformLocation(this.program, 'uTexture'),
-        useTexture: this.gl.getUniformLocation(this.program, 'uUseTexture'),
-        skyProjection: this.gl.getUniformLocation(this.program, 'uSkyProjection'),
-        cameraPosition: this.gl.getUniformLocation(this.program, 'uCameraPosition'),
-        cameraYaw: this.gl.getUniformLocation(this.program, 'uCameraYaw'),
-        alphaMode: this.gl.getUniformLocation(this.program, 'uAlphaMode'),
-        alphaCutoff: this.gl.getUniformLocation(this.program, 'uAlphaCutoff'),
-        emulateRepeat: this.gl.getUniformLocation(this.program, 'uEmulateRepeat'),
-        textureSize: this.gl.getUniformLocation(this.program, 'uTextureSize')
-      };
-
-      this.meshBuffers = uploadStaticMesh(this.gl, mesh);
-      const startupTextureKeys = textureProvider.getTextureKeys();
-      this.textureRegistry = createTextureRegistry(this.gl, startupTextureKeys, textureProvider);
-      this.dynamicBuffers = this.createDynamicBuffers();
-
-      configureWebGLState(this.gl);
-
-      this.resize(width, height, { pixelRatio });
+      this.installGpuResourceSet(this.createGpuResourceSet());
       this.initMs = performance.now() - initStart;
+      this.lifecycle = 'ready';
+      this.notifyLifecycleChange();
     } catch (error) {
       this.releaseGpuResources();
+      this.removeContextListeners();
       cleanupCanvasTarget(this);
+      this.lifecycle = 'destroyed';
       throw error;
     }
   }
 
-  createDynamicBuffers() {
+  installContextListeners() {
+    if (typeof this.canvas?.addEventListener !== 'function') return;
+    this.canvas.addEventListener('webglcontextlost', this.handleContextLost, false);
+    this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored, false);
+    this.contextListenersInstalled = true;
+  }
+
+  removeContextListeners() {
+    if (!this.contextListenersInstalled) return;
+    this.canvas?.removeEventListener?.('webglcontextlost', this.handleContextLost, false);
+    this.canvas?.removeEventListener?.('webglcontextrestored', this.handleContextRestored, false);
+    this.contextListenersInstalled = false;
+  }
+
+  notifyLifecycleChange() {
+    this.onLifecycleChange?.({
+      state: this.lifecycle,
+      error: this.lastRestoreError
+    });
+  }
+
+  handleContextLost(event) {
+    event?.preventDefault?.();
+    if (this.lifecycle === 'destroyed') return;
+
+    this.lifecycle = 'lost';
+    this.lastRestoreError = null;
+    // The browser invalidates the old objects; avoid GL cleanup calls until a context is usable again.
+    this.invalidateGpuResources();
+    this.notifyLifecycleChange();
+  }
+
+  handleContextRestored() {
+    if (this.lifecycle !== 'lost') return;
+
+    this.lifecycle = 'restoring';
+    this.lastRestoreError = null;
+    this.notifyLifecycleChange();
+    if (this.lifecycle === 'destroyed') return;
+    const restoreStart = performance.now();
+
+    let resourceSet;
+    try {
+      resourceSet = this.createGpuResourceSet();
+    } catch (cause) {
+      if (this.lifecycle === 'destroyed') return;
+      this.invalidateGpuResources();
+      this.lastRestoreError = new Error(
+        `[SectorRenderer] WebGL context restoration failed: ${cause?.message ?? cause}`,
+        { cause }
+      );
+      this.lifecycle = 'lost';
+      this.notifyLifecycleChange();
+      return;
+    }
+
+    if (this.lifecycle === 'destroyed') {
+      deleteGpuResourceSet(resourceSet.gl, resourceSet);
+      return;
+    }
+    if (this.lifecycle !== 'restoring') return;
+
+    this.installGpuResourceSet(resourceSet);
+    this.initMs = performance.now() - restoreStart;
+    this.lastRestoreError = null;
+    this.lifecycle = 'ready';
+    this.notifyLifecycleChange();
+  }
+
+  createGpuResourceSet() {
     const gl = this.gl;
+    const mesh = this.staticMesh;
+    const textureProvider = this.textureProvider;
+    const textureKeys = this.textureKeys ?? textureProvider.getTextureKeys();
+    let program = null;
+    let meshBuffers = null;
+    let textureRegistry = null;
+    let dynamicBuffers = null;
+
+    try {
+      program = createShaderProgram(gl, {
+        vertexSource: TEXTURED_VERTEX_SHADER,
+        fragmentSource: TEXTURED_FRAGMENT_SHADER
+      });
+
+      const attributeLocations = {
+        position: gl.getAttribLocation(program, 'aPosition'),
+        uv: gl.getAttribLocation(program, 'aUv'),
+        color: gl.getAttribLocation(program, 'aColor'),
+        lightLevel: gl.getAttribLocation(program, 'aLightLevel')
+      };
+
+      const uniformLocations = {
+        viewProjection: gl.getUniformLocation(program, 'uViewProjection'),
+        texture: gl.getUniformLocation(program, 'uTexture'),
+        useTexture: gl.getUniformLocation(program, 'uUseTexture'),
+        skyProjection: gl.getUniformLocation(program, 'uSkyProjection'),
+        cameraPosition: gl.getUniformLocation(program, 'uCameraPosition'),
+        cameraYaw: gl.getUniformLocation(program, 'uCameraYaw'),
+        alphaMode: gl.getUniformLocation(program, 'uAlphaMode'),
+        alphaCutoff: gl.getUniformLocation(program, 'uAlphaCutoff'),
+        emulateRepeat: gl.getUniformLocation(program, 'uEmulateRepeat'),
+        textureSize: gl.getUniformLocation(program, 'uTextureSize')
+      };
+
+      meshBuffers = uploadStaticMesh(gl, mesh);
+      textureRegistry = createTextureRegistry(gl, textureKeys, textureProvider);
+      dynamicBuffers = this.createDynamicBuffers(gl);
+      configureWebGLState(gl);
+      gl.viewport(0, 0, this.pixelWidth, this.pixelHeight);
+
+      return {
+        gl,
+        program,
+        attributeLocations,
+        uniformLocations,
+        meshBuffers,
+        textureRegistry,
+        dynamicBuffers,
+        textureKeys: Object.freeze([...textureKeys])
+      };
+    } catch (error) {
+      deleteGpuResourceSet(gl, { program, meshBuffers, textureRegistry, dynamicBuffers });
+      throw error;
+    }
+  }
+
+  installGpuResourceSet(resourceSet) {
+    this.program = resourceSet.program;
+    this.attributeLocations = resourceSet.attributeLocations;
+    this.uniformLocations = resourceSet.uniformLocations;
+    this.meshBuffers = resourceSet.meshBuffers;
+    this.textureRegistry = resourceSet.textureRegistry;
+    this.dynamicBuffers = resourceSet.dynamicBuffers;
+    this.textureKeys = resourceSet.textureKeys;
+  }
+
+  createDynamicBuffers(gl = this.gl) {
     let vertexBuffer = null;
     let indexBuffer = null;
 
@@ -344,25 +488,42 @@ export class WebGLRendererHost {
   }
 
   replaceStaticMesh(mesh) {
+    if (this.lifecycle === 'destroyed') {
+      throw new Error('[SectorRenderer] Cannot replace the world after renderer destruction.');
+    }
+    if (this.lifecycle === 'lost' || this.lifecycle === 'restoring') {
+      this.staticMesh = mesh;
+      return;
+    }
+
     const nextMeshBuffers = uploadStaticMesh(this.gl, mesh);
     const previousMeshBuffers = this.meshBuffers;
     this.meshBuffers = nextMeshBuffers;
+    this.staticMesh = mesh;
     deleteStaticMeshBuffers(this.gl, previousMeshBuffers);
   }
 
   resize(width, height, { pixelRatio = 1 } = {}) {
+    if (this.lifecycle === 'destroyed') {
+      throw new Error('[SectorRenderer] Cannot resize after renderer destruction.');
+    }
     const viewport = resolveViewportSize(width, height, pixelRatio);
     const { pixelWidth, pixelHeight } = viewport;
 
     this.viewportWidth = viewport.width;
     this.viewportHeight = viewport.height;
+    this.pixelRatio = viewport.pixelRatio;
+    this.pixelWidth = pixelWidth;
+    this.pixelHeight = pixelHeight;
 
     this.canvas.width = pixelWidth;
     this.canvas.height = pixelHeight;
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
 
-    this.gl.viewport(0, 0, pixelWidth, pixelHeight);
+    if (this.lifecycle !== 'lost' && this.lifecycle !== 'restoring') {
+      this.gl.viewport(0, 0, pixelWidth, pixelHeight);
+    }
     this.aspect = this.viewportWidth / this.viewportHeight;
   }
 
@@ -741,6 +902,13 @@ export class WebGLRendererHost {
 
   /** Draws one full frame of world geometry, sprites, and overlays. */
   render({ camera, sprites = [], worldQuads = [], overlays = [], timeSeconds = 0 }) {
+    if (this.lifecycle === 'lost' || this.lifecycle === 'restoring') {
+      return { renderMs: 0, drawCalls: 0, texturedDrawCalls: 0 };
+    }
+    if (this.lifecycle === 'destroyed') {
+      throw new Error('[SectorRenderer] Cannot render after renderer destruction.');
+    }
+
     const start = performance.now();
     const gl = this.gl;
 
@@ -807,34 +975,49 @@ export class WebGLRendererHost {
   }
 
   getTextureStats() {
-    return this.textureRegistry.getStats();
+    return this.textureRegistry?.getStats?.() ?? {
+      total: this.textureKeys?.length ?? 0,
+      loaded: 0,
+      failed: 0,
+      uploadedTextures: 0
+    };
+  }
+
+  getLifecycleStatus() {
+    return {
+      state: this.lifecycle,
+      error: this.lastRestoreError?.message ?? null
+    };
+  }
+
+  invalidateGpuResources() {
+    this.dynamicBuffers = null;
+    this.textureRegistry = null;
+    this.meshBuffers = null;
+    this.program = null;
+    this.attributeLocations = null;
+    this.uniformLocations = null;
   }
 
   releaseGpuResources() {
     if (!this.gl) return;
-
-    deleteDynamicBuffers(this.gl, this.dynamicBuffers);
-    this.dynamicBuffers = null;
-
-    this.textureRegistry?.destroy?.();
-    this.textureRegistry = null;
-
-    deleteStaticMeshBuffers(this.gl, this.meshBuffers);
-    this.meshBuffers = null;
-
-    if (this.program) {
-      this.gl.deleteProgram(this.program);
-      this.program = null;
-    }
+    deleteGpuResourceSet(this.gl, this);
+    this.invalidateGpuResources();
   }
 
   /** Releases WebGL resources and detaches only a renderer-owned canvas. */
   destroy() {
-    if (!this.gl) return;
+    if (this.lifecycle === 'destroyed') return;
+    this.lifecycle = 'destroyed';
+    this.removeContextListeners();
     this.releaseGpuResources();
     cleanupCanvasTarget(this);
+    this.notifyLifecycleChange();
     this.canvas = null;
     this.ownerContainer = null;
     this.gl = null;
+    this.staticMesh = null;
+    this.textureProvider = null;
+    this.textureKeys = null;
   }
 }

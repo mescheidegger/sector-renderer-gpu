@@ -20,6 +20,8 @@ export function createGpuDebugSnapshot({
   buildMs,
   uploadInitMs,
   renderMs,
+  lifecycle = 'ready',
+  restoreError = null,
   seamDebug = null
 }) {
   return {
@@ -43,6 +45,8 @@ export function createGpuDebugSnapshot({
       buildMs,
       uploadInitMs,
       renderMs,
+      lifecycle,
+      restoreError,
       seamDebug
     }
   };

@@ -523,9 +523,27 @@ construct → render many frames → resize as needed
 - `getStats()` returns the latest diagnostics snapshot.
 - `destroy()` frees WebGL resources and removes only a renderer-created canvas. It is safe to call repeatedly. Do not render/resize/replace after destruction.
 
+The renderer also recovers the same instance after browser WebGL context loss. It prevents the loss event's default behavior, enters `lost`, invalidates its GPU handles, and makes `render()` a GPU no-op with zero draw statistics until restoration. `replaceWorld()` remains CPU-active while unavailable, so the most recently accepted world is the one uploaded on restore. `resize()` updates the logical size, CSS size, and backing store without issuing GL calls, and the latest viewport is applied during restore. A successful restore rebuilds the program and locations, static and dynamic buffers, texture registry/uploads, global GL state, and viewport before returning to `ready`. The canvas itself is never replaced.
+
+Restoration is transactional. If any rebuild stage fails, staged resources are released, the renderer returns to `lost`, and `getStats().gpu.restoreError` contains the contextual failure message. `destroy()` removes the two context listeners in every lifecycle state and prevents a later restore callback from rebuilding the renderer.
+
 ## Diagnostics
 
-`getStats()` returns `{ backend: 'gpu', gpu: { ... } }`. The GPU object reports useful counts (sectors, authored walls, primitives, triangles, materials, textures, vertices, indices, and draw calls), timings (`buildMs`, `uploadInitMs`, `renderMs`), and optional `seamDebug`. It is a diagnostics/performance payload, not mutable renderer state. Its detailed shape may evolve during the **0.x** release series; avoid persisting it as application data.
+`getStats()` returns `{ backend: 'gpu', gpu: { ... } }`. The GPU object reports useful counts (sectors, authored walls, primitives, triangles, materials, textures, vertices, indices, and draw calls), timings (`buildMs`, `uploadInitMs`, `renderMs`), context `lifecycle` (`ready`, `lost`, `restoring`, or `destroyed`), nullable `restoreError`, and optional `seamDebug`. It is a diagnostics/performance payload, not mutable renderer state. Its detailed shape may evolve during the **0.x** release series; avoid persisting it as application data.
+
+### Manual context-loss check
+
+For a browser smoke test, run the game normally, keep the renderer's canvas visible, and execute the following in DevTools:
+
+```js
+const canvas = document.querySelector('canvas.gpu-render-canvas');
+const gl = canvas.getContext('webgl');
+const loseContext = gl.getExtension('WEBGL_lose_context');
+loseContext.loseContext();
+setTimeout(() => loseContext.restoreContext(), 2000);
+```
+
+The scene should stop receiving new GPU frames during the two-second loss without repeated WebGL errors, then resume on the same canvas after restoration. Continue through a campaign level transition afterward; the next level exercises `replaceWorld()` on the recovered renderer and should render normally. For the stricter replacement-during-loss case, call the application's normal `renderer.replaceWorld(nextWorld)` path between `loseContext()` and `restoreContext()` and confirm that only `nextWorld` appears after restore.
 
 ## Advanced Debugging
 
