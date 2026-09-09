@@ -17,6 +17,10 @@ function createTrackedGl(options = {}) {
     uniformLookups: 0,
     viewportCalls: [],
     enableCalls: [],
+    vertexAttributeEnables: [],
+    vertexAttributePointers: [],
+    bufferBindings: [],
+    drawSubmissions: [],
     depthFunctionCalls: [],
     clearColorCalls: [],
     useProgramCalls: 0,
@@ -27,6 +31,8 @@ function createTrackedGl(options = {}) {
     deletedPrograms: [],
     errors: []
   };
+  const boundBuffers = new Map();
+  const bufferContents = new Map();
   const noop = () => {};
   const gl = {
     NO_ERROR: 0,
@@ -103,8 +109,18 @@ function createTrackedGl(options = {}) {
       if (state.bufferAllocations === options.bufferAllocationFailureAt) return null;
       return { kind: 'buffer', id: state.bufferAllocations };
     },
-    bindBuffer: noop,
-    bufferData(target, data, usage) { state.bufferUploads.push({ target, data, usage }); },
+    bindBuffer(target, buffer) {
+      boundBuffers.set(target, buffer);
+      state.bufferBindings.push({ target, buffer });
+    },
+    bufferData(target, data, usage) {
+      const buffer = boundBuffers.get(target) ?? null;
+      state.bufferUploads.push({ target, data, usage, buffer });
+      bufferContents.set(buffer, data);
+      if (state.bufferUploads.length === options.bufferUploadErrorAt) {
+        state.errors.push(gl.OUT_OF_MEMORY);
+      }
+    },
     deleteBuffer(buffer) { state.deletedBuffers.push(buffer); },
     createTexture() {
       state.textureAllocations += 1;
@@ -140,9 +156,26 @@ function createTrackedGl(options = {}) {
     depthMask: noop,
     cullFace: noop,
     clear: noop,
-    enableVertexAttribArray: noop,
-    vertexAttribPointer: noop,
-    drawElements() { state.drawCalls += 1; }
+    enableVertexAttribArray(location) { state.vertexAttributeEnables.push(location); },
+    vertexAttribPointer(location, size, type, normalized, stride, offset) {
+      state.vertexAttributePointers.push({
+        location, size, type, normalized, stride, offset,
+        buffer: boundBuffers.get(gl.ARRAY_BUFFER) ?? null
+      });
+    },
+    drawElements(mode, count, type, offset) {
+      state.drawCalls += 1;
+      const vertexBuffer = boundBuffers.get(gl.ARRAY_BUFFER) ?? null;
+      state.drawSubmissions.push({
+        mode,
+        count,
+        type,
+        offset,
+        vertexBuffer,
+        indexBuffer: boundBuffers.get(gl.ELEMENT_ARRAY_BUFFER) ?? null,
+        vertexData: bufferContents.get(vertexBuffer) ?? null
+      });
+    }
   };
   return { gl, state, options };
 }
@@ -221,6 +254,14 @@ function createHost(tracked, options = {}) {
 
 function frame() {
   return { camera: { x: 0, y: 0, z: 1, yaw: 0 } };
+}
+
+function coloredQuad(x = 0) {
+  return {
+    textureKey: null,
+    color: [1, 1, 1, 1],
+    corners: [[x, 2, 1], [x + 0.5, 2, 1], [x + 0.5, 2, 0], [x, 2, 0]]
+  };
 }
 
 function world(material) {
@@ -331,6 +372,7 @@ test('context restoration recreates every renderer-owned GPU resource and resume
   assert.notEqual(host.program, original.program);
   assert.notEqual(host.meshBuffers.vertexBuffer, original.meshBuffers.vertexBuffer);
   assert.notEqual(host.dynamicBuffers.vertexBuffer, original.dynamicBuffers.vertexBuffer);
+  assert.notEqual(host.dynamicBuffers.indexBuffer, original.dynamicBuffers.indexBuffer);
   assert.notEqual(host.textureRegistry.get('texture').texture, original.texture);
   assert.equal(tracked.state.shaderAllocations, 4);
   assert.equal(tracked.state.programAllocations, 2);
@@ -339,16 +381,28 @@ test('context restoration recreates every renderer-owned GPU resource and resume
   assert.equal(tracked.state.textureUploads, 4);
   assert.equal(tracked.state.attributeLookups, 8);
   assert.equal(tracked.state.uniformLookups, 20);
+  assert.equal(tracked.state.vertexAttributeEnables.length, 8);
+  assert.equal(tracked.state.bufferUploads.filter(({ data }) => (
+    data instanceof Uint16Array && data.length === 6
+  )).length, 2, 'fixed presentation indices are uploaded once per GPU resource set');
   assert.equal(tracked.state.depthFunctionCalls.length, 2);
   assert.equal(tracked.state.clearColorCalls.length, 2);
   assert.deepEqual(tracked.state.viewportCalls, [[0, 0, 8, 6], [0, 0, 8, 6]]);
 
-  const renderStats = host.render(frame());
+  const restoredPresentationIndexBuffer = host.dynamicBuffers.indexBuffer;
+  const renderStats = host.render({ ...frame(), worldQuads: [coloredQuad()] });
   assert.equal(Number.isFinite(renderStats.renderMs), true);
-  assert.equal(renderStats.drawCalls, 1);
-  assert.equal(renderStats.texturedDrawCalls, 1);
-  assert.equal(tracked.state.drawCalls, 1);
+  assert.equal(renderStats.drawCalls, 2);
+  assert.equal(renderStats.texturedDrawCalls, 2);
+  assert.equal(tracked.state.drawCalls, 2);
+  assert.equal(tracked.state.bufferUploads.filter(({ data }) => (
+    data instanceof Uint16Array && data.length === 6
+  )).length, 2, 'rendering after restore reuses the recreated fixed index buffer');
   host.destroy();
+  assert.equal(
+    tracked.state.deletedBuffers.filter((buffer) => buffer === restoredPresentationIndexBuffer).length,
+    1
+  );
 });
 
 test('world replacement during loss retains and restores only the latest CPU mesh', () => {
@@ -507,4 +561,136 @@ test('restore failure cleans staged resources and exposes an unavailable diagnos
     textures: tracked.state.deletedTextures.length,
     programs: tracked.state.deletedPrograms.length
   }, deletionCounts);
+});
+
+test('restore rolls back the presentation buffers when fixed index upload fails', () => {
+  const tracked = createTrackedGl();
+  const { canvas, host } = createHost(tracked);
+  canvas.emit('webglcontextlost', { preventDefault() {} });
+  tracked.options.bufferUploadErrorAt = tracked.state.bufferUploads.length + 3;
+
+  canvas.emit('webglcontextrestored');
+
+  assert.equal(host.lifecycle, 'lost');
+  assert.equal(host.dynamicBuffers, null);
+  assert.match(host.lastRestoreError.message, /Presentation index-buffer GPU upload failed.*OUT_OF_MEMORY/);
+  assert.deepEqual(resourceIds(tracked.state.deletedBuffers), [8, 7, 5, 6]);
+  assert.deepEqual(resourceIds(tracked.state.deletedTextures), [2]);
+  assert.deepEqual(resourceIds(tracked.state.deletedPrograms), [2]);
+
+  const deletionCounts = {
+    buffers: tracked.state.deletedBuffers.length,
+    textures: tracked.state.deletedTextures.length,
+    programs: tracked.state.deletedPrograms.length
+  };
+  host.destroy();
+  host.destroy();
+  assert.deepEqual({
+    buffers: tracked.state.deletedBuffers.length,
+    textures: tracked.state.deletedTextures.length,
+    programs: tracked.state.deletedPrograms.length
+  }, deletionCounts);
+});
+
+test('representative presentation draws reuse fixed indices and attribute layouts while updating vertices', () => {
+  // Matches the audited frame shape: 568 total draws = 27 static + 541 presentation.
+  const staticDrawCount = 27;
+  const presentationDrawCount = 541;
+  const tracked = createTrackedGl();
+  const staticMesh = {
+    vertices: new Float32Array(10),
+    indices: new Uint16Array(staticDrawCount * 3),
+    groups: Array.from({ length: staticDrawCount }, (_, index) => ({
+      materialKey: null,
+      projection: 'world',
+      surfaceType: 'wall',
+      startIndex: index * 3,
+      indexCount: 3
+    }))
+  };
+  const { host } = createHost(tracked, { mesh: staticMesh, textureProvider: textureProvider([]) });
+  const makeQuads = (xOffset) => Array.from(
+    { length: presentationDrawCount },
+    (_, index) => coloredQuad(xOffset + index)
+  );
+
+  const fixedIndexUploads = () => tracked.state.bufferUploads.filter(({ target, data, usage }) => (
+    target === tracked.gl.ELEMENT_ARRAY_BUFFER
+      && usage === tracked.gl.STATIC_DRAW
+      && data instanceof Uint16Array
+      && data.length === 6
+  ));
+  assert.equal(tracked.state.bufferUploads.length, 3, 'resource creation uploads static mesh data and fixed quad indices');
+  assert.deepEqual(Array.from(fixedIndexUploads()[0].data), [0, 1, 2, 0, 2, 3]);
+  assert.equal(tracked.state.vertexAttributeEnables.length, 4);
+
+  const renderAndMeasure = (xOffset) => {
+    const before = {
+      uploads: tracked.state.bufferUploads.length,
+      pointers: tracked.state.vertexAttributePointers.length,
+      enables: tracked.state.vertexAttributeEnables.length,
+      bindings: tracked.state.bufferBindings.length,
+      submissions: tracked.state.drawSubmissions.length
+    };
+    const stats = host.render({
+      camera: { x: 0, y: 0, z: 1, yaw: 0 },
+      worldQuads: makeQuads(xOffset)
+    });
+    const uploads = tracked.state.bufferUploads.slice(before.uploads);
+    const submissions = tracked.state.drawSubmissions.slice(before.submissions);
+    return {
+      stats,
+      uploads,
+      submissions,
+      pointerCalls: tracked.state.vertexAttributePointers.length - before.pointers,
+      enableCalls: tracked.state.vertexAttributeEnables.length - before.enables,
+      bufferBindings: tracked.state.bufferBindings.length - before.bindings,
+      uploadedBytes: uploads.reduce((sum, { data }) => sum + data.byteLength, 0)
+    };
+  };
+
+  const first = renderAndMeasure(0);
+  assert.equal(first.stats.drawCalls, 568);
+  assert.equal(first.submissions.length, staticDrawCount + presentationDrawCount);
+  assert.equal(first.uploads.length, 541);
+  assert.ok(first.uploads.every(({ target, usage, data }) => (
+    target === tracked.gl.ARRAY_BUFFER
+      && usage === tracked.gl.DYNAMIC_DRAW
+      && data instanceof Float32Array
+      && data.length === 40
+  )));
+  assert.equal(first.uploadedBytes, 86_560);
+  assert.equal(first.pointerCalls, 8, 'the shared layout is established only for static and presentation buffers');
+  assert.equal(first.enableCalls, 0, 'attributes stay enabled after resource initialization');
+  assert.equal(first.bufferBindings, 4, 'vertex and index buffers bind only at the two path transitions');
+  assert.deepEqual(
+    first.submissions.slice(0, staticDrawCount).map(({ indexBuffer }) => indexBuffer),
+    Array(staticDrawCount).fill(host.meshBuffers.indexBuffer)
+  );
+  assert.deepEqual(
+    first.submissions.slice(staticDrawCount).map(({ indexBuffer }) => indexBuffer),
+    Array(presentationDrawCount).fill(host.dynamicBuffers.indexBuffer)
+  );
+  assert.deepEqual(
+    first.submissions.slice(staticDrawCount).map(({ vertexData }) => vertexData[0]),
+    Array.from({ length: presentationDrawCount }, (_, index) => index),
+    'presentation draw order follows submission order'
+  );
+  assert.equal(fixedIndexUploads().length, 1, 'drawing does not re-upload the fixed indices');
+
+  const second = renderAndMeasure(1000);
+  assert.equal(second.stats.drawCalls, staticDrawCount + presentationDrawCount);
+  assert.equal(second.uploads.length, presentationDrawCount);
+  assert.equal(second.pointerCalls, 8);
+  assert.equal(second.enableCalls, 0);
+  assert.equal(second.bufferBindings, 4);
+  assert.equal(second.uploadedBytes, first.uploadedBytes);
+  assert.equal(second.submissions[staticDrawCount].vertexData[0], 1000,
+    'changed object geometry reaches the dynamic vertex upload');
+  assert.equal(fixedIndexUploads().length, 1, 'repeated frames still reuse the fixed indices');
+
+  const fixedIndexBuffer = host.dynamicBuffers.indexBuffer;
+  host.destroy();
+  host.destroy();
+  assert.equal(tracked.state.deletedBuffers.filter((buffer) => buffer === fixedIndexBuffer).length, 1);
 });

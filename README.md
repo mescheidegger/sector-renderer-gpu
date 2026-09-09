@@ -523,7 +523,7 @@ construct → render many frames → resize as needed
 - `getStats()` returns the latest diagnostics snapshot.
 - `destroy()` frees WebGL resources and removes only a renderer-created canvas. It is safe to call repeatedly. Do not render/resize/replace after destruction.
 
-The renderer also recovers the same instance after browser WebGL context loss. It prevents the loss event's default behavior, enters `lost`, invalidates its GPU handles, and makes `render()` a GPU no-op with zero draw statistics until restoration. `replaceWorld()` remains CPU-active while unavailable, so the most recently accepted world is the one uploaded on restore. `resize()` updates the logical size, CSS size, and backing store without issuing GL calls, and the latest viewport is applied during restore. A successful restore rebuilds the program and locations, static and dynamic buffers, texture registry/uploads, global GL state, and viewport before returning to `ready`. The canvas itself is never replaced.
+The renderer also recovers the same instance after browser WebGL context loss. It prevents the loss event's default behavior, enters `lost`, invalidates its GPU handles, and makes `render()` a GPU no-op with zero draw statistics until restoration. `replaceWorld()` remains CPU-active while unavailable, so the most recently accepted world is the one uploaded on restore. `resize()` updates the logical size, CSS size, and backing store without issuing GL calls, and the latest viewport is applied during restore. A successful restore rebuilds the program and locations, static mesh buffers, presentation vertex/fixed-index buffers, texture registry/uploads, global GL state, and viewport before returning to `ready`. The canvas itself is never replaced.
 
 Restoration is transactional. If any rebuild stage fails, staged resources are released, the renderer returns to `lost`, and `getStats().gpu.restoreError` contains the contextual failure message. `destroy()` removes the two context listeners in every lifecycle state and prevents a later restore callback from rebuilding the renderer.
 
@@ -533,10 +533,11 @@ Restoration is transactional. If any rebuild stage fails, staged resources are r
 
 ### Manual context-loss check
 
-For a browser smoke test, run the game normally, keep the renderer's canvas visible, and execute the following in DevTools:
+For a browser smoke test, run the game normally, select the renderer canvas in the DevTools Elements panel so it is available as `$0`, and execute the following in the Console:
 
 ```js
-const canvas = document.querySelector('canvas.gpu-render-canvas');
+const canvas = $0;
+if (!(canvas instanceof HTMLCanvasElement)) throw new Error('Select the renderer canvas in Elements first');
 const gl = canvas.getContext('webgl');
 const loseContext = gl.getExtension('WEBGL_lose_context');
 loseContext.loseContext();

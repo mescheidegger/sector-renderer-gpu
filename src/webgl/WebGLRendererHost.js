@@ -12,6 +12,7 @@ import { cleanupCanvasTarget, resolveCanvasTarget } from './canvas/resolveCanvas
 import { resolveViewportSize } from './canvas/resolveViewportSize.js';
 import { resolveProjection } from './resolveProjection.js';
 import { resolveQuadUvs } from './resolveQuadUvs.js';
+import { clearWebGLErrors, throwIfWebGLError } from './webGLErrors.js';
 import { normalizeLightLevel } from '../scene/sectorLighting.js';
 import { resolveAnimatedMaterialKey } from '../materials/resolveAnimatedMaterialKey.js';
 
@@ -20,6 +21,8 @@ export const SURFACE_SEPARATION_EPSILON = 0.001;
 
 // Camera depth is measured in world units, so near-equal sprite depths retain sprite.order semantics.
 const TRANSPARENT_WORLD_DEPTH_EPSILON = 0.000001;
+
+const PRESENTATION_QUAD_INDICES = Object.freeze([0, 1, 2, 0, 2, 3]);
 
 export const DEFAULT_WORLD_QUAD_ALPHA_CUTOFF = 0.5;
 
@@ -298,6 +301,8 @@ export class WebGLRendererHost {
     this.meshBuffers = null;
     this.textureRegistry = null;
     this.dynamicBuffers = null;
+    this.activeVertexAttributeBuffer = null;
+    this.activeElementBuffer = null;
     this.staticMesh = mesh;
     this.textureProvider = textureProvider;
     this.textureKeys = null;
@@ -432,6 +437,7 @@ export class WebGLRendererHost {
       textureRegistry = createTextureRegistry(gl, textureKeys, textureProvider);
       dynamicBuffers = this.createDynamicBuffers(gl);
       configureWebGLState(gl);
+      this.enableVertexAttributes(gl, attributeLocations);
       gl.viewport(0, 0, this.pixelWidth, this.pixelHeight);
 
       return {
@@ -458,6 +464,7 @@ export class WebGLRendererHost {
     this.textureRegistry = resourceSet.textureRegistry;
     this.dynamicBuffers = resourceSet.dynamicBuffers;
     this.textureKeys = resourceSet.textureKeys;
+    this.invalidateBufferBindingState();
   }
 
   createDynamicBuffers(gl = this.gl) {
@@ -475,10 +482,26 @@ export class WebGLRendererHost {
         throw new Error('[SectorRenderer] Dynamic index buffer allocation failed.');
       }
 
+      clearWebGLErrors(gl);
+      try {
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+        gl.bufferData(
+          gl.ELEMENT_ARRAY_BUFFER,
+          new Uint16Array(PRESENTATION_QUAD_INDICES),
+          gl.STATIC_DRAW
+        );
+      } catch (error) {
+        throw new Error(
+          `[SectorRenderer] Presentation index-buffer GPU upload failed: ${error?.message ?? error}`,
+          { cause: error }
+        );
+      }
+      throwIfWebGLError(gl, 'Presentation index-buffer GPU upload');
+
       return {
         vertexBuffer,
         indexBuffer,
-        indices: new Uint16Array([0, 1, 2, 0, 2, 3])
+        indexCount: PRESENTATION_QUAD_INDICES.length
       };
     } catch (error) {
       if (indexBuffer) gl.deleteBuffer(indexBuffer);
@@ -496,7 +519,13 @@ export class WebGLRendererHost {
       return;
     }
 
-    const nextMeshBuffers = uploadStaticMesh(this.gl, mesh);
+    let nextMeshBuffers;
+    try {
+      nextMeshBuffers = uploadStaticMesh(this.gl, mesh);
+    } finally {
+      // Mesh staging binds its new buffers even when an upload fails.
+      this.invalidateBufferBindingState();
+    }
     const previousMeshBuffers = this.meshBuffers;
     this.meshBuffers = nextMeshBuffers;
     this.staticMesh = mesh;
@@ -528,15 +557,15 @@ export class WebGLRendererHost {
   }
 
   setupVertexAttributes(vertexBuffer) {
+    if (this.activeVertexAttributeBuffer === vertexBuffer) return;
+
     const gl = this.gl;
     const stride = 10 * Float32Array.BYTES_PER_ELEMENT;
 
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
 
-    gl.enableVertexAttribArray(this.attributeLocations.position);
     gl.vertexAttribPointer(this.attributeLocations.position, 3, gl.FLOAT, false, stride, 0);
 
-    gl.enableVertexAttribArray(this.attributeLocations.uv);
     gl.vertexAttribPointer(
       this.attributeLocations.uv,
       2,
@@ -546,7 +575,6 @@ export class WebGLRendererHost {
       3 * Float32Array.BYTES_PER_ELEMENT
     );
 
-    gl.enableVertexAttribArray(this.attributeLocations.color);
     gl.vertexAttribPointer(
       this.attributeLocations.color,
       4,
@@ -556,8 +584,26 @@ export class WebGLRendererHost {
       5 * Float32Array.BYTES_PER_ELEMENT
     );
 
-    gl.enableVertexAttribArray(this.attributeLocations.lightLevel);
     gl.vertexAttribPointer(this.attributeLocations.lightLevel, 1, gl.FLOAT, false, stride, 9 * Float32Array.BYTES_PER_ELEMENT);
+    this.activeVertexAttributeBuffer = vertexBuffer;
+  }
+
+  enableVertexAttributes(gl, attributeLocations) {
+    gl.enableVertexAttribArray(attributeLocations.position);
+    gl.enableVertexAttribArray(attributeLocations.uv);
+    gl.enableVertexAttribArray(attributeLocations.color);
+    gl.enableVertexAttribArray(attributeLocations.lightLevel);
+  }
+
+  bindElementBuffer(indexBuffer) {
+    if (this.activeElementBuffer === indexBuffer) return;
+    this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    this.activeElementBuffer = indexBuffer;
+  }
+
+  invalidateBufferBindingState() {
+    this.activeVertexAttributeBuffer = null;
+    this.activeElementBuffer = null;
   }
 
   setAlphaMode(alphaMode, alphaCutoff = DEFAULT_WORLD_QUAD_ALPHA_CUTOFF) {
@@ -697,12 +743,9 @@ export class WebGLRendererHost {
     writeQuadVertices(vertices, { ...quad, uvs: resolvedUvs });
 
     this.setupVertexAttributes(this.dynamicBuffers.vertexBuffer);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.dynamicBuffers.vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.DYNAMIC_DRAW);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.dynamicBuffers.indexBuffer);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.dynamicBuffers.indices, gl.DYNAMIC_DRAW);
+    this.bindElementBuffer(this.dynamicBuffers.indexBuffer);
 
     gl.uniformMatrix4fv(this.uniformLocations.viewProjection, false, viewProjection);
     if (useTexture) {
@@ -717,7 +760,7 @@ export class WebGLRendererHost {
       gl.enable?.(gl.CULL_FACE);
       gl.cullFace?.(gl.BACK);
     }
-    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    gl.drawElements(gl.TRIANGLES, this.dynamicBuffers.indexCount, gl.UNSIGNED_SHORT, 0);
     if (quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling') gl.disable?.(gl.CULL_FACE);
 
     return true;
@@ -726,7 +769,7 @@ export class WebGLRendererHost {
   drawStaticWorld(viewProjection, camera, timeSeconds = 0) {
     const gl = this.gl;
     this.setupVertexAttributes(this.meshBuffers.vertexBuffer);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.meshBuffers.indexBuffer);
+    this.bindElementBuffer(this.meshBuffers.indexBuffer);
 
     gl.uniformMatrix4fv(this.uniformLocations.viewProjection, false, viewProjection);
     gl.uniform3f(this.uniformLocations.cameraPosition, camera.x, camera.y, camera.z);
@@ -997,6 +1040,7 @@ export class WebGLRendererHost {
     this.program = null;
     this.attributeLocations = null;
     this.uniformLocations = null;
+    this.invalidateBufferBindingState();
   }
 
   releaseGpuResources() {

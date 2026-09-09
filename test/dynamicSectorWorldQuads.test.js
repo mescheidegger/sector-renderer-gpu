@@ -97,7 +97,8 @@ test('dynamic surface drawing preserves fallback color, animated materials, UVs,
   Object.assign(host, {
     gl,
     setupVertexAttributes() {},
-    dynamicBuffers: { vertexBuffer: {}, indexBuffer: {}, indices: new Uint16Array([0, 1, 2, 0, 2, 3]) },
+    dynamicBuffers: { vertexBuffer: {}, indexBuffer: {}, indexCount: 6 },
+    activeElementBuffer: null,
     uniformLocations: { useTexture: 'useTexture', alphaMode: 'alphaMode', alphaCutoff: 'alphaCutoff' },
     materialAnimations: new Map([['animated-floor', { frames: ['frame-a', 'frame-b'], frameDurationSeconds: 0.25 }]]),
     textureRegistry: { get(key) {

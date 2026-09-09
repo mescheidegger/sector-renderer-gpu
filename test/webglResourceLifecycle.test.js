@@ -122,6 +122,7 @@ function createTrackedGl(options = {}) {
     getError() { return state.errors.shift() ?? gl.NO_ERROR; },
     getAttribLocation: () => 0,
     getUniformLocation: () => ({}),
+    enableVertexAttribArray: noop,
     enable: noop,
     disable: noop,
     depthFunc: noop,
@@ -400,6 +401,25 @@ test('renderer initialization cleans one partial dynamic buffer and all earlier 
   assert.deepEqual(ids(state.deletedTextures), [1]);
   assert.deepEqual(ids(state.deletedPrograms), [1]);
   assert.equal(canvas.parentNode, null);
+});
+
+test('renderer initialization rolls back all resources when fixed presentation indices fail to upload', () => {
+  const { gl, state } = createTrackedGl({ bufferUploadErrorAt: 3 });
+  const canvas = createCanvas(gl);
+
+  assert.throws(
+    () => new WebGLRendererHost({
+      canvas,
+      width: 1,
+      height: 1,
+      mesh: mesh(),
+      textureProvider: provider({ a: textureRecord('a') })
+    }),
+    /Presentation index-buffer GPU upload failed.*OUT_OF_MEMORY/
+  );
+  assert.deepEqual(ids(state.deletedBuffers), [4, 3, 1, 2]);
+  assert.deepEqual(ids(state.deletedTextures), [1]);
+  assert.deepEqual(ids(state.deletedPrograms), [1]);
 });
 
 test('successful renderer destruction releases all owned GPU resources exactly once and preserves caller canvas', () => {
