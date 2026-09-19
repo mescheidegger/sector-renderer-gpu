@@ -82,7 +82,6 @@ function applySamplingPolicy(gl, { useMipmaps, anisotropySupport }) {
 }
 
 function runTextureUploadStage(gl, stage, operation) {
-  clearWebGLErrors(gl);
   try {
     operation();
   } catch (error) {
@@ -207,6 +206,7 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
         }
         createdTextures.add(texture);
         try {
+          clearWebGLErrors(gl);
           initializeFallbackTexture(gl, texture);
           uploadImageTexture(gl, texture, image, anisotropySupport, sampling);
         } catch (error) {

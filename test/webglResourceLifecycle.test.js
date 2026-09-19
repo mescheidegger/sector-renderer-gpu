@@ -19,6 +19,7 @@ function createTrackedGl(options = {}) {
     textureParameters: [],
     mipmappedTextures: [],
     pixelStore: [],
+    errorQueries: 0,
     errors: []
   };
   let boundTexture = null;
@@ -102,7 +103,7 @@ function createTrackedGl(options = {}) {
     texImage2D() {
       state.textureUploads += 1;
       if (state.textureUploads === options.textureUploadErrorAt) {
-        state.errors.push(gl.INVALID_VALUE);
+        state.errors.push(options.textureUploadErrorCode ?? gl.INVALID_VALUE);
       }
     },
     texParameteri(_target, parameter, value) {
@@ -119,7 +120,10 @@ function createTrackedGl(options = {}) {
       if (parameter === gl.MAX_TEXTURE_SIZE) return options.maxTextureSize ?? 4096;
       return null;
     },
-    getError() { return state.errors.shift() ?? gl.NO_ERROR; },
+    getError() {
+      state.errorQueries += 1;
+      return state.errors.shift() ?? gl.NO_ERROR;
+    },
     getAttribLocation: () => 0,
     getUniformLocation: () => ({}),
     enableVertexAttribArray: noop,
@@ -229,6 +233,21 @@ test('successful static mesh replacement installs new buffers and releases old b
   assert.deepEqual(ids(state.deletedBuffers), ['old-v', 'old-i', 1, 2]);
 });
 
+test('successful texture initialization clears once and validates all three upload stages', () => {
+  const { gl, state } = createTrackedGl();
+  const registry = createTextureRegistry(gl, ['a'], provider({ a: textureRecord('a') }));
+
+  assert.equal(registry.get('a').loaded, true);
+  assert.equal(state.textureUploads, 2, 'fallback allocation and image upload both execute');
+  assert.deepEqual(state.mipmappedTextures, [1], 'sampling/mipmap configuration executes');
+  assert.equal(
+    state.errorQueries,
+    6,
+    'MAX_TEXTURE_SIZE has a clear/check pair and the texture has one clear plus three stage checks'
+  );
+  registry.destroy();
+});
+
 test('texture registry rejects allocation, upload, mipmap, and device-limit failures transactionally', () => {
   const allocationFailure = createTrackedGl({ textureAllocationFailureAt: 1 });
   assert.throws(
@@ -236,6 +255,13 @@ test('texture registry rejects allocation, upload, mipmap, and device-limit fail
     /Texture allocation failed.*"a"/
   );
   assert.deepEqual(allocationFailure.state.deletedTextures, []);
+
+  const fallbackFailure = createTrackedGl({ textureUploadErrorAt: 1 });
+  assert.throws(
+    () => createTextureRegistry(fallbackFailure.gl, ['a'], provider({ a: textureRecord('a') })),
+    /initial allocation.*INVALID_VALUE/
+  );
+  assert.deepEqual(ids(fallbackFailure.state.deletedTextures), [1]);
 
   const uploadFailure = createTrackedGl({ textureUploadErrorAt: 2 });
   let registry;
@@ -259,6 +285,19 @@ test('texture registry rejects allocation, upload, mipmap, and device-limit fail
     /"huge" \(8x2\).*exceeds.*MAX_TEXTURE_SIZE \(4\)/
   );
   assert.equal(limitFailure.state.textureAllocations, 0);
+});
+
+test('texture upload validation reports context loss and rolls back the partial texture', () => {
+  const { gl, state } = createTrackedGl({
+    textureUploadErrorAt: 2,
+    textureUploadErrorCode: 0x9242
+  });
+
+  assert.throws(
+    () => createTextureRegistry(gl, ['a'], provider({ a: textureRecord('a') })),
+    /image upload.*CONTEXT_LOST_WEBGL/
+  );
+  assert.deepEqual(ids(state.deletedTextures), [1]);
 });
 
 test('texture registry rolls back prior uploads after a later texture fails', () => {
