@@ -16,6 +16,8 @@ const overlay = {
 function makeHost() {
   const viewportCalls = [];
   const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
   host.canvas = { width: 0, height: 0, style: {} };
   host.gl = { viewport: (...args) => viewportCalls.push(args) };
   return { host, viewportCalls };

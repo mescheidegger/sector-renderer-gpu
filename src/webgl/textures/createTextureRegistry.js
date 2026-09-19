@@ -93,14 +93,16 @@ function runTextureUploadStage(gl, stage, operation) {
   throwIfWebGLError(gl, `Texture GPU upload during ${stage}`);
 }
 
-function uploadImageTexture(gl, texture, image, anisotropySupport, sampling) {
+function* uploadImageTextureSteps(gl, texture, image, anisotropySupport, sampling) {
   runTextureUploadStage(gl, 'image upload', () => {
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
   });
+  yield;
 
   runTextureUploadStage(gl, 'mipmap/sampling configuration', () => {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
     const gpuWrap = sampling.gpuWrap === 'repeat' ? gl.REPEAT : gl.CLAMP_TO_EDGE;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gpuWrap);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gpuWrap);
@@ -136,7 +138,7 @@ function getMaxTextureSize(gl) {
 }
 
 /** Uploads all preloaded textures and exposes key-based lookup/stat helpers. */
-export function createTextureRegistry(gl, textureKeys, textureProvider) {
+export function* createTextureRegistrySteps(gl, textureKeys, textureProvider, canDelete = () => !gl.isContextLost?.()) {
   assertTextureKeys(textureKeys);
   const records = new Map();
   const glTextureByUploadKey = new Map();
@@ -146,6 +148,7 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
   const anisotropySupport = getAnisotropySupport(gl);
   const maxTextureSize = textureKeys.length > 0 ? getMaxTextureSize(gl) : null;
 
+  let completed = false;
   try {
     for (const key of textureKeys) {
       const source = textureProvider.getTexture(key);
@@ -208,7 +211,8 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
         try {
           clearWebGLErrors(gl);
           initializeFallbackTexture(gl, texture);
-          uploadImageTexture(gl, texture, image, anisotropySupport, sampling);
+          yield;
+          yield* uploadImageTextureSteps(gl, texture, image, anisotropySupport, sampling);
         } catch (error) {
           throw new Error(
             `[SectorRenderer] Failed to create texture asset "${key}": ${error?.message ?? error}`,
@@ -223,47 +227,62 @@ export function createTextureRegistry(gl, textureKeys, textureProvider) {
       record.loaded = true;
 
       records.set(record.key, record);
-    }
-  } catch (error) {
-    for (const texture of createdTextures) gl.deleteTexture(texture);
-    glTextureByUploadKey.clear();
-    imageByUploadKey.clear();
-    samplingByUploadKey.clear();
-    records.clear();
-    throw error;
-  }
-
-  const getStats = () => {
-    let loaded = 0;
-    let failed = 0;
-
-    for (const record of records.values()) {
-      if (record.loaded) loaded += 1;
-      if (record.failed) failed += 1;
+      yield;
     }
 
-    return {
-      total: records.size,
-      loaded,
-      failed,
-      uploadedTextures: glTextureByUploadKey.size
+    const getStats = () => {
+      let loaded = 0;
+      let failed = 0;
+
+      for (const record of records.values()) {
+        if (record.loaded) loaded += 1;
+        if (record.failed) failed += 1;
+      }
+
+      return {
+        total: records.size,
+        loaded,
+        failed,
+        uploadedTextures: glTextureByUploadKey.size
+      };
     };
-  };
 
-  return {
-    get(materialKey) {
-      return materialKey ? records.get(materialKey) ?? null : null;
-    },
-    getStats,
-    destroy() {
-      for (const texture of createdTextures) {
-        gl.deleteTexture(texture);
+    completed = true;
+    return {
+      get(materialKey) {
+        return materialKey ? records.get(materialKey) ?? null : null;
+      },
+      getStats,
+      destroy() {
+        for (const texture of createdTextures) {
+          if (!gl.isContextLost?.()) gl.deleteTexture(texture);
+        }
+        createdTextures.clear();
+        glTextureByUploadKey.clear();
+        imageByUploadKey.clear();
+        samplingByUploadKey.clear();
+        records.clear();
+      }
+    };
+  } finally {
+    // Closing the iterator cancels staging, including when suspended between uploads.
+    if (!completed) {
+      if (canDelete()) {
+        for (const texture of createdTextures) gl.deleteTexture(texture);
       }
       createdTextures.clear();
+      records.clear();
       glTextureByUploadKey.clear();
       imageByUploadKey.clear();
       samplingByUploadKey.clear();
-      records.clear();
     }
-  };
+  }
+}
+
+/** Synchronous compatibility path; uses exactly the same upload and rollback steps. */
+export function createTextureRegistry(gl, textureKeys, textureProvider) {
+  const steps = createTextureRegistrySteps(gl, textureKeys, textureProvider);
+  let result;
+  do { result = steps.next(); } while (!result.done);
+  return result.value;
 }

@@ -1,13 +1,14 @@
 /**
  * Module: Owns WebGL resources and either uses a caller-provided canvas or manages a renderer-created canvas.
  */
+import { schedulePreparationBatch } from './schedulePreparationBatch.js';
 import { createWebGLContext } from './createWebGLContext.js';
 import { createShaderProgram } from './createShaderProgram.js';
 import { createIdentityMat4, createLookAtMat4, createPerspectiveMat4, multiplyMat4 } from './math/mat4.js';
 import { uploadStaticMesh } from './mesh/uploadStaticMesh.js';
 import { TEXTURED_FRAGMENT_SHADER, TEXTURED_VERTEX_SHADER } from './shaders/texturedShaders.js';
 import { configureWebGLState } from './state/configureWebGLState.js';
-import { createTextureRegistry } from './textures/createTextureRegistry.js';
+import { createTextureRegistrySteps } from './textures/createTextureRegistry.js';
 import { cleanupCanvasTarget, resolveCanvasTarget } from './canvas/resolveCanvasTarget.js';
 import { resolveViewportSize } from './canvas/resolveViewportSize.js';
 import { resolveProjection } from './resolveProjection.js';
@@ -306,6 +307,10 @@ export class WebGLRendererHost {
     this.staticMesh = mesh;
     this.textureProvider = textureProvider;
     this.textureKeys = null;
+    this.preparation = null;
+    this.incrementalPreparation = mesh == null;
+    this.schedulePreparationBatch = schedulePreparationBatch;
+    this.initMs = 0;
     try {
       this.projection = resolveProjection(projection);
       this.materialAnimations = materialAnimations;
@@ -314,10 +319,14 @@ export class WebGLRendererHost {
 
       this.gl = createWebGLContext(this.canvas);
 
-      const initStart = performance.now();
-      this.installGpuResourceSet(this.createGpuResourceSet());
-      this.initMs = performance.now() - initStart;
-      this.lifecycle = 'ready';
+      if (mesh != null) {
+        const initStart = performance.now();
+        this.installGpuResourceSet(this.createGpuResourceSet());
+        this.initMs = performance.now() - initStart;
+        this.lifecycle = 'ready';
+      } else {
+        this.lifecycle = 'unprepared';
+      }
       this.notifyLifecycleChange();
     } catch (error) {
       this.releaseGpuResources();
@@ -354,6 +363,7 @@ export class WebGLRendererHost {
     if (this.lifecycle === 'destroyed') return;
 
     this.lifecycle = 'lost';
+    this.cancelPreparation(new Error('[SectorRenderer] WebGL context lost during preparation.'));
     this.lastRestoreError = null;
     // The browser invalidates the old objects; avoid GL cleanup calls until a context is usable again.
     this.invalidateGpuResources();
@@ -362,6 +372,11 @@ export class WebGLRendererHost {
 
   handleContextRestored() {
     if (this.lifecycle !== 'lost') return;
+
+    if (this.incrementalPreparation) {
+      this.beginPreparation(true).catch(() => {});
+      return;
+    }
 
     this.lifecycle = 'restoring';
     this.lastRestoreError = null;
@@ -397,7 +412,104 @@ export class WebGLRendererHost {
     this.notifyLifecycleChange();
   }
 
+  /** All callers share the same in-flight transaction. Failed attempts may be retried. */
+  prepareSharedResources() {
+    if (this.lifecycle === 'destroyed' || this.lifecycle === 'lost') {
+      return Promise.reject(new Error(`[SectorRenderer] Cannot prepare resources while ${this.lifecycle}.`));
+    }
+    if (this.preparation) return this.preparation.promise;
+    if (this.lifecycle === 'ready') return Promise.resolve();
+    return this.beginPreparation(false);
+  }
+
+  beginPreparation(restoring) {
+    const start = performance.now();
+    const transaction = { steps: this.createGpuResourceSteps(true), cancelBatch: null, running: false, gl: this.gl };
+    transaction.promise = new Promise((resolve, reject) => {
+      transaction.resolve = resolve;
+      transaction.reject = reject;
+    });
+    this.preparation = transaction;
+    this.lifecycle = restoring ? 'restoring' : 'preparing';
+    this.lastRestoreError = null;
+    this.notifyLifecycleChange();
+    const runBatch = () => {
+      if (this.preparation !== transaction) return;
+      if (this.gl.isContextLost?.()) {
+        this.handleContextLost();
+        return;
+      }
+      const batchStart = performance.now();
+      try {
+        // Half a 60 Hz frame, with a key limit for very cheap/deduplicated records.
+        // An individual GL upload is atomic and can exceed this soft time budget.
+        for (let count = 0; count < 64; count += 1) {
+          let result;
+          transaction.running = true;
+          try { result = transaction.steps.next(); }
+          finally { transaction.running = false; }
+          if (this.preparation !== transaction) {
+            transaction.steps.return();
+            if (result.done && this.lifecycle !== 'lost' && !transaction.gl.isContextLost?.()) {
+              deleteGpuResourceSet(transaction.gl, result.value);
+            }
+            return;
+          }
+          if (this.gl.isContextLost?.()) {
+            if (result.done) this.invalidateGpuResources();
+            this.handleContextLost();
+            return;
+          }
+          if (result.done) {
+            this.installGpuResourceSet(result.value);
+            this.initMs = performance.now() - start;
+            this.preparation = null;
+            this.lifecycle = 'ready';
+            this.notifyLifecycleChange();
+            transaction.resolve();
+            return;
+          }
+          if (performance.now() - batchStart >= 8) break;
+        }
+        transaction.cancelBatch = this.schedulePreparationBatch(runBatch);
+      } catch (cause) {
+        if (this.gl?.isContextLost?.()) {
+          this.handleContextLost();
+          return;
+        }
+        this.cancelPreparation(cause);
+        if (this.lifecycle === 'destroyed' || this.lifecycle === 'lost') return;
+        this.lastRestoreError = new Error(
+          `[SectorRenderer] ${restoring ? 'WebGL context restoration' : 'Shared resource preparation'} failed: ${cause?.message ?? cause}`,
+          { cause }
+        );
+        this.lifecycle = restoring ? 'lost' : 'failed';
+        this.notifyLifecycleChange();
+      }
+    };
+    if (this.preparation === transaction) {
+      transaction.cancelBatch = this.schedulePreparationBatch(runBatch);
+    }
+    return transaction.promise;
+  }
+
+  cancelPreparation(error) {
+    const transaction = this.preparation;
+    if (!transaction) return;
+    this.preparation = null;
+    transaction.cancelBatch?.();
+    if (!transaction.running) transaction.steps.return();
+    transaction.reject(error);
+  }
+
   createGpuResourceSet() {
+    const steps = this.createGpuResourceSteps();
+    let result;
+    do { result = steps.next(); } while (!result.done);
+    return result.value;
+  }
+
+  *createGpuResourceSteps(incremental = false) {
     const gl = this.gl;
     const mesh = this.staticMesh;
     const textureProvider = this.textureProvider;
@@ -406,6 +518,8 @@ export class WebGLRendererHost {
     let meshBuffers = null;
     let textureRegistry = null;
     let dynamicBuffers = null;
+    let completed = false;
+    const canDelete = () => this.lifecycle !== 'lost' && !gl.isContextLost?.();
 
     try {
       program = createShaderProgram(gl, {
@@ -433,13 +547,17 @@ export class WebGLRendererHost {
         textureSize: gl.getUniformLocation(program, 'uTextureSize')
       };
 
-      meshBuffers = uploadStaticMesh(gl, mesh);
-      textureRegistry = createTextureRegistry(gl, textureKeys, textureProvider);
+      yield;
+      if (mesh && !incremental) meshBuffers = uploadStaticMesh(gl, mesh);
+      textureRegistry = yield* createTextureRegistrySteps(gl, textureKeys, textureProvider, canDelete);
+      yield;
+      if (incremental && this.staticMesh) meshBuffers = uploadStaticMesh(gl, this.staticMesh);
       dynamicBuffers = this.createDynamicBuffers(gl);
       configureWebGLState(gl);
       this.enableVertexAttributes(gl, attributeLocations);
       gl.viewport(0, 0, this.pixelWidth, this.pixelHeight);
 
+      completed = true;
       return {
         gl,
         program,
@@ -450,9 +568,10 @@ export class WebGLRendererHost {
         dynamicBuffers,
         textureKeys: Object.freeze([...textureKeys])
       };
-    } catch (error) {
-      deleteGpuResourceSet(gl, { program, meshBuffers, textureRegistry, dynamicBuffers });
-      throw error;
+    } finally {
+      if (!completed && canDelete()) {
+        deleteGpuResourceSet(gl, { program, meshBuffers, textureRegistry, dynamicBuffers });
+      }
     }
   }
 
@@ -514,6 +633,9 @@ export class WebGLRendererHost {
     if (this.lifecycle === 'destroyed') {
       throw new Error('[SectorRenderer] Cannot replace the world after renderer destruction.');
     }
+    if (['unprepared', 'preparing', 'failed'].includes(this.lifecycle)) {
+      throw new Error('[SectorRenderer] Await prepareSharedResources() before installing a world.');
+    }
     if (this.lifecycle === 'lost' || this.lifecycle === 'restoring') {
       this.staticMesh = mesh;
       return;
@@ -550,7 +672,7 @@ export class WebGLRendererHost {
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
 
-    if (this.lifecycle !== 'lost' && this.lifecycle !== 'restoring') {
+    if (this.lifecycle === 'ready') {
       this.gl.viewport(0, 0, pixelWidth, pixelHeight);
     }
     this.aspect = this.viewportWidth / this.viewportHeight;
@@ -945,7 +1067,7 @@ export class WebGLRendererHost {
 
   /** Draws one full frame of world geometry, sprites, and overlays. */
   render({ camera, sprites = [], worldQuads = [], overlays = [], timeSeconds = 0 }) {
-    if (this.lifecycle === 'lost' || this.lifecycle === 'restoring') {
+    if (this.lifecycle !== 'destroyed' && (this.lifecycle !== 'ready' || !this.meshBuffers)) {
       return { renderMs: 0, drawCalls: 0, texturedDrawCalls: 0 };
     }
     if (this.lifecycle === 'destroyed') {
@@ -1053,6 +1175,7 @@ export class WebGLRendererHost {
   destroy() {
     if (this.lifecycle === 'destroyed') return;
     this.lifecycle = 'destroyed';
+    this.cancelPreparation(new Error('[SectorRenderer] Renderer destroyed during preparation.'));
     this.removeContextListeners();
     this.releaseGpuResources();
     cleanupCanvasTarget(this);

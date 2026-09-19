@@ -18,6 +18,8 @@
  * @property {RendererWall[]} walls Boundary wall spans referencing vertices.
  * @property {number} floor Floor Z coordinate.
  * @property {number} ceil Ceiling Z coordinate.
+ * @property {number} [solidBottomZ] Explicit lower boundary of this contained sector's physical solid interval.
+ * @property {string} [solidBottomMaterial] Material used by the downward-facing surface at solidBottomZ.
  * @property {{x:number,y:number}} [floorUvOrigin] Optional planar floor UV origin in world coordinates.
  * @property {string|null} [floorMaterial] Material key resolved directly through the TextureProvider or through a configured material animation.
  * @property {string|null} [ceilingMaterial] Material key resolved directly through the TextureProvider or through a configured material animation.
@@ -95,7 +97,7 @@
  * @typedef {{enabled?:boolean,targetSeamKey?:string,targetWallRef?:WallRef}} RendererSeamDebugOptions
  * @typedef {{seam?:RendererSeamDebugOptions}} RendererDebugOptions
  * @typedef {import('./textureProvider.js').TextureProvider} TextureProvider
- * @typedef {{world:SectorRenderWorld,canvas?:HTMLCanvasElement,container?:HTMLElement,width?:number,height?:number,pixelRatio?:number,projection?:RendererProjection,textureProvider:TextureProvider,materialAnimations?:MaterialAnimation[],debug?:RendererDebugOptions}} SectorRendererOptions
+ * @typedef {{world?:SectorRenderWorld,canvas?:HTMLCanvasElement,container?:HTMLElement,width?:number,height?:number,pixelRatio?:number,projection?:RendererProjection,textureProvider:TextureProvider,materialAnimations?:MaterialAnimation[],debug?:RendererDebugOptions}} SectorRendererOptions
  */
 
 const fail = (message) => { throw new TypeError(`[SectorRenderer] ${message}`); };
@@ -138,6 +140,19 @@ export function assertRendererWorld(world) {
     if (!Number.isFinite(sector.floor)) fail(`Sector "${key}" floor must be finite.`);
     if (!Number.isFinite(sector.ceil)) fail(`Sector "${key}" ceil must be finite.`);
     if (sector.ceil <= sector.floor) fail(`Sector "${key}" ceil must be greater than floor.`);
+    if (sector.solidBottomZ !== undefined && !Number.isFinite(sector.solidBottomZ)) {
+      fail(`Sector "${key}" solidBottomZ must be finite when provided.`);
+    }
+    if (Number.isFinite(sector.solidBottomZ) && sector.solidBottomZ > sector.floor) {
+      fail(`Sector "${key}" solidBottomZ must be <= floor.`);
+    }
+    if (sector.solidBottomMaterial !== undefined &&
+        (typeof sector.solidBottomMaterial !== 'string' || sector.solidBottomMaterial.length === 0)) {
+      fail(`Sector "${key}" solidBottomMaterial must be a non-empty string when provided.`);
+    }
+    if (sector.solidBottomMaterial !== undefined && sector.solidBottomZ === undefined) {
+      fail(`Sector "${key}" solidBottomMaterial requires solidBottomZ.`);
+    }
     assertMaterialKey(sector.floorMaterial, `Sector "${key}" floorMaterial`);
     if (sector.floorUvOrigin != null && (!sector.floorUvOrigin || typeof sector.floorUvOrigin !== 'object' || Array.isArray(sector.floorUvOrigin) || !Number.isFinite(sector.floorUvOrigin.x) || !Number.isFinite(sector.floorUvOrigin.y))) {
       fail(`Sector "${key}" floorUvOrigin must contain finite x and y coordinates.`);
@@ -168,6 +183,12 @@ export function assertRendererWorld(world) {
       if (!sectorById.has(sector.parentSectorId)) {
         fail(`Sector "${sectorKey}" parentSectorId references unknown sector "${normalizedId(sector.parentSectorId)}".`);
       }
+      const parent = sectorById.get(sector.parentSectorId);
+      if (Number.isFinite(sector.solidBottomZ) && sector.solidBottomZ < parent.floor) {
+        fail(`Sector "${sectorKey}" solidBottomZ must be >= parent sector floor.`);
+      }
+    } else if (sector.solidBottomZ !== undefined) {
+      fail(`Sector "${sectorKey}" solidBottomZ requires parentSectorId.`);
     }
     sector.walls.forEach((wall, wallIndex) => {
       if (wall.portalTo != null && (wall.portalLinks?.length ?? 0) > 0) {
@@ -206,6 +227,14 @@ export function assertRendererWorld(world) {
     if (id == null) fail('dynamicSectorIds may not contain null IDs.');
     if (!sectorById.has(id)) fail(`Unknown dynamic sector id "${String(id)}".`);
     if (dynamic.has(id)) fail(`Duplicate dynamic sector id "${String(id)}".`);
+    if (sectorById.get(id)?.solidBottomZ !== undefined) {
+      fail(`Dynamic sector id "${String(id)}" cannot reference an explicitly elevated contained solid.`);
+    }
+    if (world.sectors.some((sector) =>
+      sector.parentSectorId === id && sector.solidBottomZ !== undefined
+    )) {
+      fail(`Dynamic sector id "${String(id)}" cannot own an explicitly elevated contained solid.`);
+    }
     dynamic.add(id);
   }
   if (world.portalOpenings !== undefined && !Array.isArray(world.portalOpenings)) fail('portalOpenings must be an array.');

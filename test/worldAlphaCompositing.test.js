@@ -82,6 +82,8 @@ test('mask shader discards transparent fragments and makes survivors opaque', ()
 test('alpha modes and mask cutoff map to explicit shader uniforms', () => {
   const { gl, state } = createStateGl();
   const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
   Object.assign(host, {
     gl,
     uniformLocations: { alphaMode: 'alpha-mode', alphaCutoff: 'alpha-cutoff' }
@@ -100,6 +102,8 @@ test('opaque and masked world quads keep depth writes enabled and blended quads 
   const { gl, state } = createStateGl();
   const seen = [];
   const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
   Object.assign(host, {
     gl,
     drawPreparedWorldQuad(draw) {
@@ -126,6 +130,8 @@ test('transparent world pass depth-tests, disables depth writes, configures blen
   const { gl, state } = createStateGl();
   const seen = [];
   const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
   Object.assign(host, {
     gl,
     uniformLocations: { alphaMode: 'alpha-mode', alphaCutoff: 'alpha-cutoff' },
@@ -151,6 +157,8 @@ test('transparent world pass depth-tests, disables depth writes, configures blen
 test('transparent world pass restores depth and alpha shader state when drawing throws', () => {
   const { gl, state } = createStateGl();
   const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
   Object.assign(host, {
     gl,
     uniformLocations: { alphaMode: 'alpha-mode', alphaCutoff: 'alpha-cutoff' },
@@ -205,6 +213,8 @@ test('blended world quads and billboard sprites interleave by shared camera dept
     const { gl } = createStateGl();
     const order = [];
     const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
     Object.assign(host, {
       gl,
       uniformLocations: { alphaMode: 'alpha-mode', alphaCutoff: 'alpha-cutoff' },
@@ -294,6 +304,8 @@ test('opaque and masked geometry is submitted before transparent world objects',
   });
   const order = [];
   const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
   Object.assign(host, {
     gl,
     program: {},

@@ -15,12 +15,13 @@ import { validateMaterialAnimations } from './materials/resolveAnimatedMaterialK
  */
 export class SectorRenderer {
   /**
-   * Creates a renderer, validates its provider/world, builds static geometry, and initializes WebGL.
+   * With a world, builds geometry and initializes WebGL synchronously. Without a world,
+   * creates an unprepared owner; await prepareSharedResources() before replaceWorld().
    * Supply exactly one of `canvas` and `container`; a container receives a renderer-owned canvas.
    * @param {import('./contracts.js').SectorRendererOptions} options
    */
   constructor({
-    world,
+    world = null,
     canvas,
     container,
     width,
@@ -39,8 +40,8 @@ export class SectorRenderer {
     assertTextureProvider(textureProvider);
     this.materialAnimations = validateMaterialAnimations(materialAnimations, textureProvider);
 
-    const sceneBuild = this.buildStaticScene(world);
-    this.gpuScene = sceneBuild.gpuScene;
+    const sceneBuild = world == null ? null : this.buildStaticScene(world);
+    this.gpuScene = sceneBuild?.gpuScene ?? null;
 
     this.host = new WebGLRendererHost({
       canvas,
@@ -49,7 +50,7 @@ export class SectorRenderer {
       height,
       pixelRatio,
       projection,
-      mesh: sceneBuild.mesh,
+      mesh: sceneBuild?.mesh ?? null,
       textureProvider,
       materialAnimations: this.materialAnimations,
       onLifecycleChange: ({ state, error }) => {
@@ -73,14 +74,23 @@ export class SectorRenderer {
       }
     });
 
-    this.meshStats = sceneBuild.meshStats;
-    this.buildMs = sceneBuild.buildMs;
+    this.meshStats = sceneBuild?.meshStats ?? null;
+    this.buildMs = sceneBuild?.buildMs ?? 0;
 
     this.debugSnapshot = this.createSnapshot({
       renderMs: 0,
-      drawCallCount: sceneBuild.mesh.groups.length,
-      texturedDrawCallCount: this.meshStats.texturedGroupCount
+      drawCallCount: sceneBuild?.mesh.groups.length ?? 0,
+      texturedDrawCallCount: this.meshStats?.texturedGroupCount ?? 0
     });
+  }
+
+  /** Prepare context-owned resources incrementally, without installing a world.
+   * Concurrent calls share one promise. Await before the first replaceWorld().
+   * Rejects on failure, context loss or destruction; a restored context is rebuilt automatically.
+   * @returns {Promise<void>}
+   */
+  prepareSharedResources() {
+    return this.host.prepareSharedResources();
   }
 
   buildStaticScene(world) {
@@ -122,29 +132,28 @@ export class SectorRenderer {
 
   createSnapshot({ renderMs, drawCallCount, texturedDrawCallCount }) {
     const textureStats = this.host.getTextureStats();
-
     return createGpuDebugSnapshot({
-      sectorCount: this.gpuScene.sectors,
-      authoredWallCount: this.gpuScene.stats.authoredWalls,
-      wallPrimitiveCount: this.gpuScene.walls.length,
-      wallTriangleCount: this.meshStats.wallTriangles,
-      floorTriangleCount: this.meshStats.floorTriangles,
-      ceilingTriangleCount: this.meshStats.ceilingTriangles,
-      wallMaterialCount: this.meshStats.wallMaterialCount,
-      floorMaterialCount: this.meshStats.floorMaterialCount,
-      ceilingMaterialCount: this.meshStats.ceilingMaterialCount,
+      sectorCount: this.gpuScene?.sectors ?? 0,
+      authoredWallCount: this.gpuScene?.stats.authoredWalls ?? 0,
+      wallPrimitiveCount: this.gpuScene?.walls.length ?? 0,
+      wallTriangleCount: this.meshStats?.wallTriangles ?? 0,
+      floorTriangleCount: this.meshStats?.floorTriangles ?? 0,
+      ceilingTriangleCount: this.meshStats?.ceilingTriangles ?? 0,
+      wallMaterialCount: this.meshStats?.wallMaterialCount ?? 0,
+      floorMaterialCount: this.meshStats?.floorMaterialCount ?? 0,
+      ceilingMaterialCount: this.meshStats?.ceilingMaterialCount ?? 0,
       loadedTextureCount: textureStats.loaded,
       totalTextureCount: textureStats.total,
       texturedDrawCallCount,
-      totalVertexCount: this.meshStats.vertexCount,
-      totalIndexCount: this.meshStats.indexCount,
+      totalVertexCount: this.meshStats?.vertexCount ?? 0,
+      totalIndexCount: this.meshStats?.indexCount ?? 0,
       drawCallCount,
       buildMs: this.buildMs,
       uploadInitMs: this.host.initMs,
       renderMs,
       lifecycle: this.rendererLifecycle,
       restoreError: this.restoreError,
-      seamDebug: this.gpuScene.seamDebug ?? null
+      seamDebug: this.gpuScene?.seamDebug ?? null
     });
   }
 

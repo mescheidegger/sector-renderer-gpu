@@ -7,6 +7,8 @@ function drawSprites(sprites, yaw = 0) {
   const drawn = [];
   const depthMasks = [];
   const host = Object.create(WebGLRendererHost.prototype);
+  host.lifecycle = 'ready';
+  host.meshBuffers = {};
   Object.assign(host, {
     gl: {
       COLOR_BUFFER_BIT: 1,

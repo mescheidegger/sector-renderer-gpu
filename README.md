@@ -176,6 +176,8 @@ Optional world collections, including per-wall `portalLinks`, follow the same ru
 | `ceilColor` | Optional number | `0xRRGGBB` flat-color fallback. Otherwise derived from wall colors (or gray). |
 | `lightLevel` | Optional number | Defaults to `1`. Values `0..1` are direct; values above 1 are interpreted on a `0..255` scale; the result is clamped to `0..1`. |
 | `parentSectorId` | Optional exact sector ID | Advanced nested-sector hint. A child omits its ceiling; a child floor matching its parent's floor is also omitted. The relationship is not a general scene graph. |
+| `solidBottomZ` | Optional finite number | Explicit physical bottom of a contained solid. Its sides span from this elevation to the child floor; omission retains the parent-floor fallback. |
+| `solidBottomMaterial` | Optional material key | Material for the downward-facing underside emitted at `solidBottomZ`. |
 
 ### `RendererVertex`
 
@@ -502,7 +504,7 @@ Constructor options:
 
 | Option | Requirement | Behavior |
 | --- | --- | --- |
-| `world` | Required | Valid `SectorRenderWorld`; static geometry is built immediately. |
+| `world` | Optional | When supplied, valid `SectorRenderWorld`; static geometry and shared resources are built synchronously. Omit to prepare shared resources before installing a world. |
 | `canvas` / `container` | Exactly one | A supplied canvas remains caller-owned. With a container, the renderer creates/appends a canvas and removes it on failed construction or `destroy()`. |
 | `width`, `height` | Optional, default `1280`, `720` | Positive logical CSS viewport dimensions. |
 | `pixelRatio` | Optional, default `1` | Positive finite backing-store multiplier; invalid values fall back to `1`. It does not affect logical overlay dimensions, and the renderer does not automatically read device DPR. |
@@ -523,13 +525,30 @@ construct → render many frames → resize as needed
 - `getStats()` returns the latest diagnostics snapshot.
 - `destroy()` frees WebGL resources and removes only a renderer-created canvas. It is safe to call repeatedly. Do not render/resize/replace after destruction.
 
+### Prepare shared resources before a world
+
+```js
+const renderer = new SectorRenderer({ canvas, textureProvider, materialAnimations });
+await renderer.prepareSharedResources();
+renderer.replaceWorld(world);
+// Render normally, replace more worlds, then renderer.destroy().
+```
+
+Without `world`, construction creates the canvas/context owner but no geometry, shaders, or GPU textures. `prepareSharedResources()` prepares the program, texture registry, sampling/capability state, and presentation buffers. It is idempotent when ready; concurrent calls return the same in-flight promise. Applications may begin preparation whenever preloaded provider images are available and await that same operation when they need their first world. The provider and its image records must remain available and stable throughout preparation and context restoration.
+
+Preparation runs in batches with an 8 ms soft budget and at most 64 steps (texture records or individual upload stages). Each batch is scheduled in a task after an animation-frame opportunity, so paint and input can run between batches. Hidden documents use tasks without waiting for animation frames. One image upload, mipmap operation, or shader compilation is indivisible and can exceed the budget. The synchronous constructor drains these same staging steps without yielding; texture validation, deduplication, sampling, and rollback are identical.
+
+Await preparation before the first `replaceWorld()`: calls in `unprepared`, `preparing`, or `failed` states throw. Rendering without a world or while preparing is a validated no-op. World installation builds and uploads only static geometry, transactionally; no shared texture uploads or shader allocations repeat. Resizing is supported in every live state.
+
+Destroy cancels queued work, rejects pending preparation, and immediately releases staged and installed resources. Preparation failure rejects, rolls back staging, and enters `failed`; callers may explicitly retry on the same owner. Context loss rejects the interrupted operation and invalidates staging without issuing cleanup calls on the lost context. Restoration automatically starts a fresh transaction on the same owner: renderers created without a world restore incrementally, while the existing synchronous construction path retains synchronous restoration. Call `prepareSharedResources()` during restoration to await it; while `lost`, it rejects. World replacement while lost/restoring retains the latest CPU mesh for restoration, as before. Callers must handle preparation rejection, including shutdown or context loss.
+
 The renderer also recovers the same instance after browser WebGL context loss. It prevents the loss event's default behavior, enters `lost`, invalidates its GPU handles, and makes `render()` a GPU no-op with zero draw statistics until restoration. `replaceWorld()` remains CPU-active while unavailable, so the most recently accepted world is the one uploaded on restore. `resize()` updates the logical size, CSS size, and backing store without issuing GL calls, and the latest viewport is applied during restore. A successful restore rebuilds the program and locations, static mesh buffers, presentation vertex/fixed-index buffers, texture registry/uploads, global GL state, and viewport before returning to `ready`. The canvas itself is never replaced.
 
 Restoration is transactional. If any rebuild stage fails, staged resources are released, the renderer returns to `lost`, and `getStats().gpu.restoreError` contains the contextual failure message. `destroy()` removes the two context listeners in every lifecycle state and prevents a later restore callback from rebuilding the renderer.
 
 ## Diagnostics
 
-`getStats()` returns `{ backend: 'gpu', gpu: { ... } }`. The GPU object reports useful counts (sectors, authored walls, primitives, triangles, materials, textures, vertices, indices, and draw calls), timings (`buildMs`, `uploadInitMs`, `renderMs`), context `lifecycle` (`ready`, `lost`, `restoring`, or `destroyed`), nullable `restoreError`, and optional `seamDebug`. It is a diagnostics/performance payload, not mutable renderer state. Its detailed shape may evolve during the **0.x** release series; avoid persisting it as application data.
+`getStats()` returns `{ backend: 'gpu', gpu: { ... } }`. The GPU object reports useful counts (sectors, authored walls, primitives, triangles, materials, textures, vertices, indices, and draw calls), timings (`buildMs`, `uploadInitMs`, `renderMs`), context `lifecycle` (`unprepared`, `preparing`, `failed`, `ready`, `lost`, `restoring`, or `destroyed`), nullable `restoreError`, and optional `seamDebug`. World counts are zero before installation. For incremental preparation, `uploadInitMs` includes the time spent yielding between batches. It is a diagnostics/performance payload, not mutable renderer state. Its detailed shape may evolve during the **0.x** release series; avoid persisting it as application data.
 
 ### Manual context-loss check
 
