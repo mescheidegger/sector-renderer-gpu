@@ -2,23 +2,26 @@
  * Module: Builds floor and ceiling primitive batches per sector from triangulated polygon data.
  */
 import { triangulateSectorPolygon } from '../mesh/triangulateSectorPolygon.js';
+import { getContainedSolidSpan } from '../containedSolidSpan.js';
 import { deriveSurfaceColor } from '../materials/surfaceColor.js';
 import { resolveSectorSurfaceMaterial } from '../materials/gpuMaterials.js';
 import { resolveSectorLightLevel } from './sectorLighting.js';
 
 const SURFACE_Z_EPSILON = 0.0001;
 
-function buildSurfacePrimitive(sector, kind, triangleIndices) {
+function buildSurfacePrimitive(sector, kind, triangleIndices, options = {}) {
   if (!Array.isArray(triangleIndices) || triangleIndices.length === 0) {
     return null;
   }
 
-  const z = kind === 'floor' ? sector.floor : sector.ceil;
+  const z = options.z ?? (kind === 'floor' ? sector.floor : sector.ceil);
   if (typeof z !== 'number' || !Number.isFinite(z)) {
     return null;
   }
 
-  const material = resolveSectorSurfaceMaterial(sector, kind);
+  const material = options.materialKey === undefined
+    ? resolveSectorSurfaceMaterial(sector, kind)
+    : (options.materialKey ? { key: options.materialKey, surfaceType: kind } : null);
   const projection = kind === 'ceiling' ? sector.ceilingProjection ?? 'world' : 'world';
   const lightLevel = resolveSectorLightLevel(sector);
   const uvOrigin = kind === 'floor' ? sector.floorUvOrigin ?? null : null;
@@ -33,7 +36,7 @@ function buildSurfacePrimitive(sector, kind, triangleIndices) {
       }
 
       return {
-        id: `${sector.id}-${kind}-tri-${triangleIndex}`,
+        id: `${sector.id}-${options.idSuffix ?? kind}-tri-${triangleIndex}`,
         kind,
         sectorId: sector.id,
         color: deriveSurfaceColor(sector, kind),
@@ -55,7 +58,7 @@ function buildSurfacePrimitive(sector, kind, triangleIndices) {
   }
 
   return {
-    id: `${sector.id}-${kind}`,
+    id: `${sector.id}-${options.idSuffix ?? kind}`,
     kind,
     sectorId: sector.id,
     z,
@@ -83,13 +86,18 @@ export function buildSurfacePrimitives(map, options = {}) {
 
   for (const sector of map.sectors) {
     const parent = sector.parentSectorId != null ? sectorById.get(sector.parentSectorId) : null;
+    const containedSpan = parent && sector.solidBottomZ !== undefined
+      ? getContainedSolidSpan({ parentSector: parent, childSector: sector })
+      : null;
     const floorMatchesParent = parent && Math.abs((sector.floor ?? 0) - (parent.floor ?? 0)) <= SURFACE_Z_EPSILON;
     const includesFloor = !excludeFloorSectorIds.has(sector.id) && (options.includeFloor?.(sector) ?? true);
     const expectsFloor = includesFloor && !floorMatchesParent;
     const expectsCeiling = (options.includeCeilings ?? true) && !parent;
-    if (!expectsFloor && !expectsCeiling) continue;
+    const expectsUnderside = (options.includeCeilings ?? true) && containedSpan &&
+      containedSpan.topZ > containedSpan.bottomZ + SURFACE_Z_EPSILON;
+    if (!expectsFloor && !expectsCeiling && !expectsUnderside) continue;
     const triangleIndices = triangulateSectorPolygon(sector.vertices);
-    if ((expectsFloor || expectsCeiling) && triangleIndices.length === 0) {
+    if ((expectsFloor || expectsCeiling || expectsUnderside) && triangleIndices.length === 0) {
       throw new Error(
         `[SectorRenderer] Sector "${sector.id}" polygon could not be triangulated. ` +
         'Vertices must form a non-degenerate simple polygon.'
@@ -101,6 +109,13 @@ export function buildSurfacePrimitives(map, options = {}) {
     const ceilingPrimitive = !expectsCeiling
       ? null
       : buildSurfacePrimitive(sector, 'ceiling', triangleIndices);
+    const undersidePrimitive = !expectsUnderside
+      ? null
+      : buildSurfacePrimitive(sector, 'ceiling', triangleIndices, {
+        z: containedSpan.bottomZ,
+        materialKey: sector.solidBottomMaterial,
+        idSuffix: 'underside'
+      });
 
     if (floorPrimitive) {
       floors.push(floorPrimitive);
@@ -112,6 +127,12 @@ export function buildSurfacePrimitives(map, options = {}) {
       ceilings.push(ceilingPrimitive);
       stats.ceilingPrimitives += 1;
       stats.ceilingTriangles += ceilingPrimitive.triangles.length;
+    }
+
+    if (undersidePrimitive) {
+      ceilings.push(undersidePrimitive);
+      stats.ceilingPrimitives += 1;
+      stats.ceilingTriangles += undersidePrimitive.triangles.length;
     }
   }
 

@@ -16,7 +16,7 @@ const sector = (id = 1) => ({
 const world = (extra = {}) => ({ sectors: [sector()], ...extra });
 
 test('public barrel exposes only the deliberate consumer API', () => {
-  assert.deepEqual(Object.keys(api).sort(), ['DEFAULT_PROJECTION','SectorRenderer','assertRendererFrame','assertRendererTextureRecord','assertRendererWorld','assertTextureProvider','createDynamicSectorWorldQuads'].sort());
+  assert.deepEqual(Object.keys(api).sort(), ['DEFAULT_PROJECTION','SectorRenderer','assertRendererFrame','assertRendererTextureRecord','assertRendererWorld','assertTextureProvider','createDynamicSectorWorldQuads','getContainedSolidSpan'].sort());
   assert.equal('createApp' in api, false);
 });
 
@@ -101,6 +101,39 @@ test('renderer world boundary validates exact portal and parent sector IDs', () 
     () => api.assertRendererWorld({ sectors: [target, referencing({ parentSectorId: '0' })] }),
     /Sector "source" parentSectorId references unknown sector "0"/
   );
+});
+
+test('renderer world boundary validates elevated contained-solid metadata', () => {
+  const parent = { ...sector('parent'), floor: 0, ceil: 8 };
+  const child = {
+    ...sector('child'), parentSectorId: parent.id, floor: 3, ceil: 8,
+    solidBottomZ: 2.75, solidBottomMaterial: 'UNDERSIDE'
+  };
+  assert.doesNotThrow(() => api.assertRendererWorld({ sectors: [parent, child] }));
+  assert.deepEqual(api.getContainedSolidSpan({ parentSector: parent, childSector: child }), {
+    bottomZ: 2.75, topZ: 3
+  });
+  assert.throws(() => api.assertRendererWorld({
+    sectors: [parent, { ...child, solidBottomZ: NaN }]
+  }), /solidBottomZ must be finite/);
+  assert.throws(() => api.assertRendererWorld({
+    sectors: [parent, { ...child, solidBottomZ: 3.1 }]
+  }), /solidBottomZ must be <= floor/);
+  assert.throws(() => api.assertRendererWorld({
+    sectors: [parent, { ...child, solidBottomZ: -0.1 }]
+  }), /solidBottomZ must be >= parent sector floor/);
+  assert.throws(() => api.assertRendererWorld({
+    sectors: [parent, { ...child, solidBottomMaterial: '' }]
+  }), /solidBottomMaterial must be a non-empty string/);
+  assert.throws(() => api.assertRendererWorld({
+    sectors: [parent, { ...child, solidBottomMaterial: null }]
+  }), /solidBottomMaterial must be a non-empty string/);
+  assert.throws(() => api.assertRendererWorld({
+    sectors: [parent, { ...child, solidBottomZ: undefined }]
+  }), /solidBottomMaterial requires solidBottomZ/);
+  assert.throws(() => api.assertRendererWorld({
+    sectors: [parent, child], dynamicSectorIds: [child.id]
+  }), /cannot reference an explicitly elevated contained solid/);
 });
 
 test('renderer world boundary validates vertically partitioned portal links', () => {

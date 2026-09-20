@@ -2,6 +2,7 @@
  * Module: Core seam resolver that decides whether each seam is solid or portal and emits the corresponding wall primitives.
  */
 import { resolveWallMaterial } from '../materials/gpuMaterials.js';
+import { getContainedSolidSpan } from '../containedSolidSpan.js';
 import { createWallPrimitive } from './createWallPrimitive.js';
 import {
   GEOMETRY_EPSILON,
@@ -497,8 +498,11 @@ function resolveWallSpansForSeam({
 
     if (!treatAsPortal) {
       const parentSector = ownerSector.parentSectorId != null ? (sectorById.get(ownerSector.parentSectorId) ?? null) : null;
-      const solidBottomZ = parentSector ? Math.min(parentSector.floor, ownerSector.floor) : ownerSector.floor;
-      const solidTopZ = parentSector ? Math.max(parentSector.floor, ownerSector.floor) : ownerSector.ceil;
+      const containedSpan = parentSector
+        ? getContainedSolidSpan({ parentSector, childSector: ownerSector })
+        : null;
+      const solidBottomZ = containedSpan?.bottomZ ?? ownerSector.floor;
+      const solidTopZ = containedSpan?.topZ ?? ownerSector.ceil;
       const emittedPrimitive = emitFromEntry({
         entry: owner,
         otherSector: parentSector,
@@ -508,11 +512,11 @@ function resolveWallSpansForSeam({
       });
       if (seamDebugResolution) {
         seamDebugResolution.leftSectorId = ownerSector.id;
-        seamDebugResolution.splitLevels = [ownerSector.floor, ownerSector.ceil];
+        seamDebugResolution.splitLevels = [solidBottomZ, solidTopZ];
         seamDebugResolution.intervals.push({
           intervalIndex: 0,
-          bottomZ: ownerSector.floor,
-          topZ: ownerSector.ceil,
+          bottomZ: solidBottomZ,
+          topZ: solidTopZ,
           leftSolid: true,
           rightSolid: false,
           skipped: !Boolean(emittedPrimitive),

@@ -8,3 +8,4 @@ export { createDynamicSectorWorldQuads } from './createDynamicSectorWorldQuads.j
 export { assertRendererWorld, assertRendererFrame } from './contracts.js';
 export { assertTextureProvider, assertRendererTextureRecord } from './textureProvider.js';
 export { DEFAULT_PROJECTION } from './webgl/resolveProjection.js';
+export { getContainedSolidSpan } from './containedSolidSpan.js';
