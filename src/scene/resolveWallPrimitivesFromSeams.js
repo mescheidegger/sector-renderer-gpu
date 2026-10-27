@@ -761,12 +761,16 @@ function resolveWallSpansForSeam({
         segment: rightSegment
       });
       if (leftPrimitive) {
+        // Both sector materials must survive, but only the owning side may draw
+        // each face. Small world-space offsets cannot separate distant depths.
+        leftPrimitive.interiorNormal = { x: left.line.nx * left.sideSign, y: left.line.ny * left.sideSign };
         leftPrimitive.sharedSolidOffset = true;
         leftPrimitive.sourceA = leftSourceSegment.a;
         leftPrimitive.sourceB = leftSourceSegment.b;
       }
 
       if (rightPrimitive) {
+        rightPrimitive.interiorNormal = { x: right.line.nx * right.sideSign, y: right.line.ny * right.sideSign };
         rightPrimitive.sharedSolidOffset = true;
         rightPrimitive.sourceA = rightSourceSegment.a;
         rightPrimitive.sourceB = rightSourceSegment.b;

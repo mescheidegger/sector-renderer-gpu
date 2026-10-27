@@ -2,7 +2,8 @@
 export const DEFAULT_PROJECTION = Object.freeze({
   fovY: Math.PI / 3,
   near: 0.1,
-  far: 160
+  // Large exterior sightlines and their finite sky masks extend beyond 160 units.
+  far: 512
 });
 
 /** Applies the default perspective values while preserving caller overrides. */

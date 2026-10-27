@@ -12,6 +12,9 @@
  * @property {RendererId|null} [portalTo] Exact ID of the sector behind this wall.
  * @property {{sectorId:RendererId,bottomZ:number,topZ:number}[]} [portalLinks] Explicit vertically partitioned portal neighbors.
  * @property {number} [uvScale] Positive world units per horizontal texture repeat.
+ * @property {number} [uvScaleV] Positive world units per vertical texture repeat (default 1).
+ * @property {number} [uvOffsetV] World Z at vertical UV zero (default 0).
+ * @property {boolean} [uvFlipU=false] Mirror horizontal sampling across the authored wall's sampled span; preserves scale/crop and continuity across renderer splits.
  * @typedef {Object} RendererSector
  * @property {RendererId} id Unique ID (also unique after String(id)).
  * @property {RendererVertex[]} vertices Ordered vertices of a simple polygon.
@@ -71,6 +74,7 @@
  * @property {number[]} [color] RGBA fallback color in 0..1; enables flat-color drawing when the texture is missing. Defaults to white for textured quads.
  * @property {'wall'|'floor'|'ceiling'} [surfaceType] Renderer surface semantics: animated material lookup and back-face culling for floors/ceilings. Produced by createDynamicSectorWorldQuads.
  * @property {'world'|'sky'} [projection='world'] Texture coordinate projection.
+ * @property {boolean} [cullBackFaces=false] Draw only the front of the cyclic winding. Renderer-generated shared-solid faces use this to preserve per-side ownership; floors/ceilings always cull back faces.
  * @property {number} [opacity=1] Opacity scalar.
  * @property {'opaque'|'mask'|'blend'} [alphaMode] Compositing behavior. When omitted, opacity/color alpha below 1 selects blend; otherwise textured quads select mask and flat-color quads select opaque.
  * @property {number} [alphaCutoff=0.5] Mask threshold applied to combined texture/color opacity alpha; normalized to 0..1. Discarded fragments write neither color nor depth.

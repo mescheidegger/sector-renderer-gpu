@@ -28,7 +28,7 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
     texturedGroupCount: 0
   };
 
-  const getGroup = (material, fallbackColor, surfaceType, projection = 'world') => {
+  const getGroup = (material, fallbackColor, surfaceType, projection = 'world', cullBackFaces = false) => {
     const materialKey = material?.key ?? null;
     let projectionGroups = groupLookup.get(materialKey);
     if (!projectionGroups) {
@@ -40,19 +40,21 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
       surfaceGroups = new Map();
       projectionGroups.set(projection, surfaceGroups);
     }
-    if (!surfaceGroups.has(surfaceType)) {
+    const surfaceKey = `${surfaceType}:${cullBackFaces}`;
+    if (!surfaceGroups.has(surfaceKey)) {
       const group = {
         materialKey,
         surfaceType,
         projection,
+        ...(cullBackFaces ? { cullBackFaces: true } : {}),
         fallbackColor,
         indices: []
       };
-      surfaceGroups.set(surfaceType, group);
+      surfaceGroups.set(surfaceKey, group);
       unpackedGroups.push(group);
     }
 
-    return surfaceGroups.get(surfaceType);
+    return surfaceGroups.get(surfaceKey);
   };
 
   const pushVertex = (position, uv, color, lightLevel) => {
@@ -70,11 +72,11 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
     );
   };
 
-  const pushTriangle = ({ a, b, c, uvA, uvB, uvC, color, kind, material, projection = 'world' }) => {
+  const pushTriangle = ({ a, b, c, uvA, uvB, uvC, color, kind, material, projection = 'world', cullBackFaces = false }) => {
     if (nextIndex + 2 > 65535) {
       throw new RangeError(`[SectorRenderer] Static mesh exceeds the WebGL1 Uint16 index limit (vertex count ${nextIndex + 3}; maximum index 65535 / vertex capacity 65536).`);
     }
-    const group = getGroup(material, color, kind, projection);
+    const group = getGroup(material, color, kind, projection, cullBackFaces);
 
     const lightLevel = typeof a.lightLevel === 'number' ? a.lightLevel : 1;
     pushVertex(a, uvA, color, lightLevel);
@@ -107,7 +109,8 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
         color: quad.color,
         kind: quad.surfaceType,
         material: quad.textureKey ? { key: quad.textureKey } : null,
-        projection: quad.projection
+        projection: quad.projection,
+        cullBackFaces: quad.cullBackFaces
       });
     }
   }
@@ -123,6 +126,7 @@ export function buildStaticMeshFromGpuScene(gpuScene) {
       materialKey: group.materialKey,
       surfaceType: group.surfaceType,
       projection: group.projection,
+      ...(group.cullBackFaces ? { cullBackFaces: true } : {}),
       fallbackColor: group.fallbackColor,
       startIndex,
       indexCount: group.indices.length

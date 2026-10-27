@@ -229,7 +229,7 @@ A sector can keep its ordinary ceiling polygon while sampling its ceiling materi
 
 The ceiling triangles remain the visibility and masking surface. With `'sky'`, texture coordinates come from camera/view direction instead of the ceiling's planar coordinates: yaw changes the visible horizontal portion, while camera translation, authored sector XY position, and ceiling height do not translate the panorama or determine its apparent distance. Horizontal sampling wraps continuously through 360 degrees. Omitting `ceilingProjection`, or setting it to `'world'`, preserves existing ceiling rendering. Camera pitch and roll remain unsupported by the renderer generally.
 
-Static draw grouping distinguishes material, projection mode, and surface type. One texture key may safely appear on world- and sky-projected surfaces, while double-sided/no-cull walls remain separate from one-sided, back-face-culled floors and ceilings.
+Static draw grouping distinguishes material, projection mode, surface type, and shared-wall sidedness. One texture key may safely appear on world- and sky-projected surfaces. Ordinary walls remain double-sided; each shared-solid face is wound and culled toward its owning sector interior. This preserves both sector materials without letting the reverse face win a distant depth tie. Floors and ceilings retain their existing back-face culling.
 
 ## Portals
 
@@ -452,7 +452,7 @@ For compatibility, an omitted `alphaMode` resolves in one place: a quad with `op
 
 Quads produced by `createDynamicSectorWorldQuads` explicitly use `'opaque'`, preserving the compositing and depth-write policy of their equivalent static renderer-generated surfaces without changing the omitted-mode behavior of caller-submitted world quads.
 
-Renderer-generated surface quads also carry `surfaceType` (`'wall'`, `'floor'`, or `'ceiling'`), RGBA `color` (components in `0..1`), and `projection` (`'world'` by default, or `'sky'`). `surfaceType` enables material-animation resolution at the submitted `timeSeconds` and back-face culling for floors/ceilings; walls remain double-sided. `color` is used when `textureKey` is null or its resolved texture is unavailable. Ordinary quads without these fields retain their default behavior. Explicit UVs from the dynamic builder use the same full-image repeating coordinates as static surfaces.
+Renderer-generated surface quads also carry `surfaceType` (`'wall'`, `'floor'`, or `'ceiling'`), RGBA `color` (components in `0..1`), and `projection` (`'world'` by default, or `'sky'`). `surfaceType` enables material-animation resolution at the submitted `timeSeconds` and back-face culling for floors/ceilings. Shared-solid wall faces additionally set `cullBackFaces: true`, with cyclic corners wound toward their owning interior; other walls remain double-sided. Callers may explicitly set `cullBackFaces: true` to render only the front of their cyclic winding. Omission/false preserves the ordinary quad default; floors/ceilings always cull back faces. `color` is used when `textureKey` is null or its resolved texture is unavailable. Explicit UVs from the dynamic builder use the same full-image repeating coordinates as static surfaces.
 
 ### `RendererOverlay`
 
@@ -481,10 +481,17 @@ The renderer retains logical viewport dimensions separately from the canvas back
 
 ```js
 import { DEFAULT_PROJECTION } from 'sector-renderer-gpu';
-// { fovY: Math.PI / 3, near: 0.1, far: 160 }
+// { fovY: Math.PI / 3, near: 0.1, far: 512 }
 ```
 
 Pass partial overrides as `projection: { fovY, near, far }`. `fovY` is vertical radians and must be finite, greater than `0`, and less than `Math.PI`. `near` must be finite and `> 0`; `far` must be finite and `> near`. Projection does not add camera pitch.
+
+The default far plane includes long exterior sightlines and sky-ceiling visibility masks.
+The 60° vertical FOV and `0.1` near plane preserve screen scale and close-range clearance.
+Sky masks remain ordinary finite, depth-tested geometry. Raising `far` does not change
+static mesh submission or allocate additional GPU resources, although more fragments may
+survive clipping. See the [large-map projection review](docs/large-map-projection.md)
+for measured depth behavior, captures, and reproduction commands.
 
 ## Renderer Construction and Lifecycle
 
@@ -647,4 +654,4 @@ Every frame key must exist in the supplied `TextureProvider`; the logical key it
 
 `RendererWall` may declare either `portalTo?: RendererId | null` or `portalLinks?: Array<{ sectorId: RendererId, bottomZ: number, topZ: number }>`; a non-empty `portalLinks` array is mutually exclusive with `portalTo`. Each finite positive interval must be non-overlapping on its wall, reference an existing sector, and lie inside the shared vertical extent. Solid wall bands are emitted outside the declared openings. Reciprocity is recommended but not required by the reusable renderer boundary.
 
-Static mesh groups are separated by material, projection, and surface type so walls retain double-sided/no-cull presentation while planar floors and ceilings remain one-sided. For `dynamicSectorIds`, dependent floors and seams are omitted from the static mesh and supplied by `createDynamicSectorWorldQuads`, including reciprocal `portalTo`/`portalLinks` surfaces. This keeps both sides of each moving seam under the same renderer geometry rules.
+Static mesh groups are separated by material, projection, surface type, and shared-wall sidedness. Ordinary walls retain double-sided/no-cull presentation, shared-solid faces draw only toward their owning interiors, and planar floors/ceilings remain one-sided. For `dynamicSectorIds`, dependent floors and seams are omitted from the static mesh and supplied by `createDynamicSectorWorldQuads`, including reciprocal `portalTo`/`portalLinks` surfaces. This keeps both sides of each moving seam under the same renderer geometry rules. See the [distant-wall review](docs/distant-wall-flicker.md) for evidence and tests.

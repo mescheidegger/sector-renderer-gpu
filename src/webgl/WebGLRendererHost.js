@@ -878,12 +878,13 @@ export class WebGLRendererHost {
     gl.uniform1f(this.uniformLocations.skyProjection, quad.projection === 'sky' ? 1 : 0);
     this.setTextureSampling(textureRecord);
     this.setAlphaMode(alphaMode, alphaCutoff);
-    if (quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling') {
+    const cullBackFaces = quad.cullBackFaces === true || quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling';
+    if (cullBackFaces) {
       gl.enable?.(gl.CULL_FACE);
       gl.cullFace?.(gl.BACK);
     }
     gl.drawElements(gl.TRIANGLES, this.dynamicBuffers.indexCount, gl.UNSIGNED_SHORT, 0);
-    if (quad.surfaceType === 'floor' || quad.surfaceType === 'ceiling') gl.disable?.(gl.CULL_FACE);
+    if (cullBackFaces) gl.disable?.(gl.CULL_FACE);
 
     return true;
   }
@@ -902,7 +903,7 @@ export class WebGLRendererHost {
     let texturedDrawCalls = 0;
 
     for (const group of this.meshBuffers.groups) {
-      if (group.surfaceType === 'floor' || group.surfaceType === 'ceiling') {
+      if (group.cullBackFaces === true || group.surfaceType === 'floor' || group.surfaceType === 'ceiling') {
         gl.enable?.(gl.CULL_FACE);
         gl.cullFace?.(gl.BACK);
       } else {
@@ -986,6 +987,7 @@ export class WebGLRendererHost {
         color: quad.color,
         surfaceType: quad.surfaceType,
         projection: quad.projection,
+        cullBackFaces: quad.cullBackFaces,
         uvs: quad.uvs ?? null
       },
       viewProjection,

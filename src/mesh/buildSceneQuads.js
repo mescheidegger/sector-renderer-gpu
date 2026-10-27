@@ -24,19 +24,40 @@ export function* buildSceneQuads(scene) {
   for (const wall of scene.walls) {
     const length = Math.hypot(wall.x1 - wall.x0, wall.y1 - wall.y0);
     const uvScale = Number.isFinite(wall.uvScale) && wall.uvScale > 0 ? wall.uvScale : WALL_UV_SCALE;
-    const uStart = wall.uvUStart ?? ((wall.uvUOffset ?? 0) / uvScale);
-    const uEnd = wall.uvUEnd ?? (((wall.uvUOffset ?? 0) + length) / uvScale);
-    const vBottom = wall.bottomZ / WALL_HEIGHT_UV_SCALE;
-    const vTop = wall.topZ / WALL_HEIGHT_UV_SCALE;
+    let uStart = wall.uvUStart ?? ((wall.uvUOffset ?? 0) / uvScale);
+    let uEnd = wall.uvUEnd ?? (((wall.uvUOffset ?? 0) + length) / uvScale);
+    if (wall.uvFlipU === true) {
+      // Explicit fitted spans (e.g. portal trim) mirror their own UV interval.
+      // Tiled walls mirror the complete authored wall, including clipped parts.
+      const mirrorSpan = wall.uvUStart != null && wall.uvUEnd != null
+        ? wall.uvUStart + wall.uvUEnd : (wall.uvWallLength ?? length) / uvScale;
+      uStart = mirrorSpan - uStart;
+      uEnd = mirrorSpan - uEnd;
+    }
+    const uvScaleV = Number.isFinite(wall.uvScaleV) && wall.uvScaleV > 0 ? wall.uvScaleV : WALL_HEIGHT_UV_SCALE;
+    const uvOffsetV = Number.isFinite(wall.uvOffsetV) ? wall.uvOffsetV : 0;
+    const vBottom = (wall.bottomZ - uvOffsetV) / uvScaleV;
+    const vTop = (wall.topZ - uvOffsetV) / uvScaleV;
+    const corners = [
+      [wall.x0, wall.y0, wall.bottomZ],
+      [wall.x1, wall.y1, wall.bottomZ],
+      [wall.x1, wall.y1, wall.topZ],
+      [wall.x0, wall.y0, wall.topZ]
+    ];
+    const uvs = [[uStart, vBottom], [uEnd, vBottom], [uEnd, vTop], [uStart, vTop]];
+    // The default A-bottom/B-bottom/B-top winding faces (dy,-dx).
+    // Authored edge direction is independent of sector winding; use the seam's
+    // local interior normal, and reverse positions AND UVs together if needed.
+    const reverse = wall.interiorNormal && (
+      (wall.y1 - wall.y0) * wall.interiorNormal.x
+      - (wall.x1 - wall.x0) * wall.interiorNormal.y < 0
+    );
+    const order = reverse ? [0, 3, 2, 1] : [0, 1, 2, 3];
     yield {
       ...attributes(wall, 'wall', 0xffffff),
-      corners: [
-        [wall.x0, wall.y0, wall.bottomZ],
-        [wall.x1, wall.y1, wall.bottomZ],
-        [wall.x1, wall.y1, wall.topZ],
-        [wall.x0, wall.y0, wall.topZ]
-      ],
-      uvs: [[uStart, vBottom], [uEnd, vBottom], [uEnd, vTop], [uStart, vTop]]
+      ...(wall.interiorNormal ? { cullBackFaces: true } : {}),
+      corners: order.map(i => corners[i]),
+      uvs: order.map(i => uvs[i])
     };
   }
 
