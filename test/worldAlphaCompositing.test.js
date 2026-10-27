@@ -76,7 +76,7 @@ test('mask shader discards transparent fragments and makes survivors opaque', ()
   const output = TEXTURED_FRAGMENT_SHADER.indexOf('gl_FragColor =');
   assert.ok(discard >= 0 && discard < output, 'discard occurs before fragment color/depth output');
   assert.match(TEXTURED_FRAGMENT_SHADER, /else if \(uAlphaMode < 1\.5\)[\s\S]*outputAlpha = 1\.0;/);
-  assert.match(TEXTURED_FRAGMENT_SHADER, /gl_FragColor = vec4\(baseColor\.rgb \* vLightLevel, outputAlpha\);/);
+  assert.match(TEXTURED_FRAGMENT_SHADER, /gl_FragColor = vec4\(baseColor\.rgb \* effectiveLightLevel, outputAlpha\);/);
 });
 
 test('alpha modes and mask cutoff map to explicit shader uniforms', () => {

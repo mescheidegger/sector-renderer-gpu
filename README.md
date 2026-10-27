@@ -229,6 +229,8 @@ A sector can keep its ordinary ceiling polygon while sampling its ceiling materi
 
 The ceiling triangles remain the visibility and masking surface. With `'sky'`, texture coordinates come from camera/view direction instead of the ceiling's planar coordinates: yaw changes the visible horizontal portion, while camera translation, authored sector XY position, and ceiling height do not translate the panorama or determine its apparent distance. Horizontal sampling wraps continuously through 360 degrees. Omitting `ceilingProjection`, or setting it to `'world'`, preserves existing ceiling rendering. Camera pitch and roll remain unsupported by the renderer generally.
 
+Sky-projected surfaces display their sampled color at full brightness, independent of sector `lightLevel`. This also applies to submitted world quads with `projection: 'sky'`. Walls, floors, and world-projected ceilings continue to use their sector lighting. Ceiling geometry, depth testing, texture filtering, and alpha behavior are unchanged.
+
 Static draw grouping distinguishes material, projection mode, surface type, and shared-wall sidedness. One texture key may safely appear on world- and sky-projected surfaces. Ordinary walls remain double-sided; each shared-solid face is wound and culled toward its owning sector interior. This preserves both sector materials without letting the reverse face win a distant depth tie. Floors and ceilings retain their existing back-face culling.
 
 ## Portals

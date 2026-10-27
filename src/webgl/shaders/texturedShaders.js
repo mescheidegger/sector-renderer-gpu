@@ -87,6 +87,8 @@ void main() {
     outputAlpha = 1.0;
   }
 
-  gl_FragColor = vec4(baseColor.rgb * vLightLevel, outputAlpha);
+  // The panorama represents distant sky, independent of the sector masking it.
+  float effectiveLightLevel = uSkyProjection > 0.5 ? 1.0 : vLightLevel;
+  gl_FragColor = vec4(baseColor.rgb * effectiveLightLevel, outputAlpha);
 }
 `;
